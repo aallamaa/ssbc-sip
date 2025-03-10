@@ -252,13 +252,17 @@ impl<'a> SipMessage<'a> {
             return Ok(());
         }
 
+        // Cache the message length to avoid multiple calls
+        let message_len = self.raw_message.len();
+        let message_bytes = self.raw_message.as_bytes();
+
         // Find the end of the start line
         let start_line_end =
             self.raw_message
                 .find("\r\n")
                 .ok_or_else(|| ParseError::InvalidMessage {
                     message: "No CRLF after start line".to_string(),
-                    position: Some(TextRange::new(0, self.raw_message.len().min(20))),
+                    position: Some(TextRange::new(0, message_len.min(20))),
                 })?;
 
         // Set the start line range
@@ -273,21 +277,27 @@ impl<'a> SipMessage<'a> {
             start_line_end + 2 + pos + 4
         } else {
             // No body, headers until the end
-            self.raw_message.len()
+            message_len
         };
 
         // Parse all headers, handling folded lines
         let mut pos = start_line_end + 2;
         let mut current_header_start = pos;
 
-        while pos < body_start - 2 {
-            // Look ahead to see if the next line is a continuation (folded header)
-            let next_line_start = pos + self.raw_message[pos..].find("\r\n").unwrap_or(0) + 2;
+        // Pre-compute the ending position for the loop condition to avoid repeated calculations
+        let headers_end = body_start - 2;
 
+        while pos < headers_end {
+            // Look ahead to see if the next line is a continuation (folded header)
+            // Optimize by using a slice of the message for finding the next line end
+            let next_line_offset = self.raw_message[pos..].find("\r\n").unwrap_or(0);
+            let next_line_start = pos + next_line_offset + 2;
+
+            // Check if the next line is a folded header continuation
             if next_line_start < body_start
-                && next_line_start < self.raw_message.len()
-                && (self.raw_message.as_bytes()[next_line_start] == b' '
-                    || self.raw_message.as_bytes()[next_line_start] == b'\t')
+                && next_line_start < message_len
+                && (message_bytes.get(next_line_start) == Some(&b' ')
+                    || message_bytes.get(next_line_start) == Some(&b'\t'))
             {
                 // This is a folded line, continue to next line
                 pos = next_line_start;
@@ -298,7 +308,7 @@ impl<'a> SipMessage<'a> {
             let line_end = if let Some(end) = self.raw_message[pos..].find("\r\n") {
                 pos + end
             } else {
-                body_start - 2
+                headers_end
             };
 
             // Process complete header (from start to end, including any folded parts)
@@ -311,8 +321,8 @@ impl<'a> SipMessage<'a> {
         }
 
         // Set body if present
-        if body_start < self.raw_message.len() {
-            self.body = Some(TextRange::new(body_start, self.raw_message.len()));
+        if body_start < message_len {
+            self.body = Some(TextRange::new(body_start, message_len));
         }
 
         // Validate required headers for requests if validation is enabled
@@ -320,7 +330,9 @@ impl<'a> SipMessage<'a> {
             self.validate_required_headers()?;
         }
 
+        // Mark as parsed
         self.headers_parsed = true;
+
         Ok(())
     }
 
@@ -379,9 +391,18 @@ impl<'a> SipMessage<'a> {
     /// Process a single header line (potentially folded)
     fn process_header_line(&mut self, range: TextRange) -> Result<(), ParseError> {
         let line = range.as_str(self.raw_message);
+        let message_bytes = self.raw_message.as_bytes();
 
         // Unfold header line by replacing any CRLF + whitespace with a single space
-        let unfolded_line = line.replace("\r\n ", " ").replace("\r\n\t", " ");
+        // Optimize by using a more efficient approach for replacing patterns in the string
+        let unfolded_line = {
+            // Most headers won't be folded, so optimize for the common case
+            if line.contains("\r\n") {
+                line.replace("\r\n ", " ").replace("\r\n\t", " ")
+            } else {
+                line.to_string()
+            }
+        };
 
         // Find the colon separating header name and value
         let colon_pos = unfolded_line
@@ -398,23 +419,32 @@ impl<'a> SipMessage<'a> {
         // Convert compact form to full form if necessary
         let normalized_name = self.expand_compact_header(&lowercase_name);
 
+        // Find position of colon in the original line once and reuse
+        let original_colon_pos = line.find(':').unwrap();
+
         // Extract value (skip leading whitespace)
         // We don't need this for now, but keep it for future use
+        // Optimize by avoiding unnecessary calculation when not needed
         let _value_str = unfolded_line[colon_pos + 1..].trim();
 
         // Create a raw range for the value part in the original message
         // For folded headers, this is approximate but works for our zero-copy approach
         // since we'll normalize whitespace in the getter methods anyway
-        let mut value_start = range.start + line.find(':').unwrap() + 1;
-        while value_start < range.end
-            && (self.raw_message.as_bytes()[value_start] == b' '
-                || self.raw_message.as_bytes()[value_start] == b'\t')
+        let mut value_start = range.start + original_colon_pos + 1;
+
+        // Optimize bounds checking in the loop
+        let range_end = range.end;
+
+        // Skip leading whitespace more efficiently
+        while value_start < range_end
+            && (message_bytes.get(value_start) == Some(&b' ')
+                || message_bytes.get(value_start) == Some(&b'\t'))
         {
             value_start += 1;
         }
 
-        let value_range = TextRange::new(value_start, range.end);
-        let name_range = TextRange::new(range.start, range.start + colon_pos);
+        let value_range = TextRange::new(value_start, range_end);
+        let name_range = TextRange::new(range.start, range.start + original_colon_pos);
 
         // Store the header in the appropriate field, checking for duplicates of required single-occurrence headers
         match normalized_name {
