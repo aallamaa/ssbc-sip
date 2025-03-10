@@ -347,24 +347,66 @@ impl<'a> SipMessage<'a> {
         let value_range = TextRange::new(value_start, range.end);
         let name_range = TextRange::new(range.start, range.start + colon_pos);
 
-        // Store the header in the appropriate field
+        // Store the header in the appropriate field, checking for duplicates of required single-occurrence headers
         match name.to_lowercase().as_str() {
             "via" => {
-                self.via = Some(HeaderValue::Raw(value_range));
+                // Via is special - it can appear multiple times, in which case we'd ideally
+                // collect all instances, but for now we're just taking the first one
+                if self.via.is_none() {
+                    self.via = Some(HeaderValue::Raw(value_range));
+                }
+                // Always add to headers list regardless
+                self.headers
+                    .push((name_range, HeaderValue::Raw(value_range)));
             }
             "to" => {
+                // To header must appear exactly once
+                if self.to.is_some() {
+                    return Err(ParseError::InvalidHeader {
+                        message: "Duplicate To header".to_string(),
+                        position: Some(range),
+                    });
+                }
                 self.to = Some(HeaderValue::Raw(value_range));
             }
             "from" => {
+                // From header must appear exactly once
+                if self.from.is_some() {
+                    return Err(ParseError::InvalidHeader {
+                        message: "Duplicate From header".to_string(),
+                        position: Some(range),
+                    });
+                }
                 self.from = Some(HeaderValue::Raw(value_range));
             }
             "call-id" => {
+                // Call-ID header must appear exactly once
+                if self.call_id.is_some() {
+                    return Err(ParseError::InvalidHeader {
+                        message: "Duplicate Call-ID header".to_string(),
+                        position: Some(range),
+                    });
+                }
                 self.call_id = Some(HeaderValue::Raw(value_range));
             }
             "cseq" => {
+                // CSeq header must appear exactly once
+                if self.cseq.is_some() {
+                    return Err(ParseError::InvalidHeader {
+                        message: "Duplicate CSeq header".to_string(),
+                        position: Some(range),
+                    });
+                }
                 self.cseq = Some(HeaderValue::Raw(value_range));
             }
             "max-forwards" => {
+                // Max-Forwards header must appear exactly once if present
+                if self.max_forwards.is_some() {
+                    return Err(ParseError::InvalidHeader {
+                        message: "Duplicate Max-Forwards header".to_string(),
+                        position: Some(range),
+                    });
+                }
                 self.max_forwards = Some(HeaderValue::Raw(value_range));
             }
             "event" => {
@@ -1032,16 +1074,15 @@ Call-ID: a84b4c76e66710@pc33.atlanta.com\r
 CSeq: 314159 INVITE\r
 Contact: <sip:alice@pc33.atlanta.com>\r
 Content-Type: application/sdp\r
-Content-Length: 142\r
-\r
-v=0\r
-o=alice 53655765 2353687637 IN IP4 pc33.atlanta.com\r
-s=Session SDP\r
-c=IN IP4 pc33.atlanta.com\r
-t=0 0\r
-m=audio 49172 RTP/AVP 0\r
-a=rtpmap:0 PCMU/8000\r
-";
+Content-Length: 142\r\n\
+\r\n
+v=0\r\n
+o=alice 53655765 2353687637 IN IP4 pc33.atlanta.com\r\n
+s=Session SDP\r\n
+c=IN IP4 pc33.atlanta.com\r\n
+t=0 0\r\n
+m=audio 49172 RTP/AVP 0\r\n
+a=rtpmap:0 PCMU/8000\r\n";
 
     // Invalid SIP message examples
     let invalid_message =
@@ -1936,5 +1977,106 @@ From: Alice <malformed-uri>\r
             }
             other => other,
         }
+    }
+
+    #[test]
+    fn test_duplicate_header_detection() {
+        // Test message with duplicate headers that should be rejected
+        let message_with_duplicate_to = "\
+INVITE sip:bob@biloxi.com SIP/2.0\r
+Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r
+To: Bob <sip:bob@biloxi.com>\r
+To: Bob <sip:bob@example.com>\r
+From: Alice <sip:alice@atlanta.com>;tag=1928301774\r
+Call-ID: a84b4c76e66710@pc33.atlanta.com\r
+CSeq: 314159 INVITE\r
+\r
+";
+        let mut sip_message = SipMessage::new(message_with_duplicate_to);
+        let result = sip_message.parse();
+        assert!(result.is_err(), "Should reject duplicate To headers");
+
+        if let Err(ParseError::InvalidHeader {
+            message,
+            position: _,
+        }) = result
+        {
+            assert!(message.contains("Duplicate To header"));
+        } else {
+            panic!("Expected InvalidHeader error for duplicate To");
+        }
+
+        // Test message with duplicate From header
+        let message_with_duplicate_from = "\
+INVITE sip:bob@biloxi.com SIP/2.0\r
+Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r
+To: Bob <sip:bob@biloxi.com>\r
+From: Alice <sip:alice@atlanta.com>;tag=1928301774\r
+From: Carol <sip:carol@example.com>;tag=987654321\r
+Call-ID: a84b4c76e66710@pc33.atlanta.com\r
+CSeq: 314159 INVITE\r
+\r
+";
+        let mut sip_message = SipMessage::new(message_with_duplicate_from);
+        let result = sip_message.parse();
+        assert!(result.is_err(), "Should reject duplicate From headers");
+
+        if let Err(ParseError::InvalidHeader {
+            message,
+            position: _,
+        }) = result
+        {
+            assert!(message.contains("Duplicate From header"));
+        } else {
+            panic!("Expected InvalidHeader error for duplicate From");
+        }
+
+        // Test message with duplicate CSeq header
+        let message_with_duplicate_cseq = "\
+INVITE sip:bob@biloxi.com SIP/2.0\r
+Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r
+To: Bob <sip:bob@biloxi.com>\r
+From: Alice <sip:alice@atlanta.com>;tag=1928301774\r
+Call-ID: a84b4c76e66710@pc33.atlanta.com\r
+CSeq: 314159 INVITE\r
+CSeq: 1 ACK\r
+\r
+";
+        let mut sip_message = SipMessage::new(message_with_duplicate_cseq);
+        let result = sip_message.parse();
+        assert!(result.is_err(), "Should reject duplicate CSeq headers");
+
+        if let Err(ParseError::InvalidHeader {
+            message,
+            position: _,
+        }) = result
+        {
+            assert!(message.contains("Duplicate CSeq header"));
+        } else {
+            panic!("Expected InvalidHeader error for duplicate CSeq");
+        }
+
+        // Test message with multiple Via headers (which is allowed by the SIP spec)
+        let message_with_multiple_vias = "\
+INVITE sip:bob@biloxi.com SIP/2.0\r
+Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r
+Via: SIP/2.0/UDP bigbox3.site3.atlanta.com;branch=z9hG4bK77ef4c2312983.1\r
+Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds;received=192.0.2.1\r
+To: Bob <sip:bob@biloxi.com>\r
+From: Alice <sip:alice@atlanta.com>;tag=1928301774\r
+Call-ID: a84b4c76e66710@pc33.atlanta.com\r
+CSeq: 314159 INVITE\r
+\r
+";
+        let mut sip_message = SipMessage::new(message_with_multiple_vias);
+        assert!(
+            sip_message.parse().is_ok(),
+            "Should allow multiple Via headers"
+        );
+
+        // Verify that Via header was parsed successfully
+        let via_result = sip_message.via();
+        assert!(via_result.is_ok());
+        assert!(via_result.unwrap().is_some());
     }
 }
