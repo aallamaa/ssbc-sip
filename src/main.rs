@@ -98,6 +98,158 @@ macro_rules! ensure_header_parsed {
     };
 }
 
+/// Macro to check for duplicate headers and set header value
+#[macro_export]
+macro_rules! check_duplicate_and_set {
+    ($self:expr, $header_field:expr, $value_range:expr, $header_name:expr, $range:expr) => {
+        {
+            // Check for duplicate header
+            if $header_field.is_some() {
+                return Err(ParseError::InvalidHeader {
+                    message: format!("Duplicate {} header", $header_name),
+                    position: Some($range),
+                });
+            }
+            $header_field = Some(HeaderValue::Raw($value_range));
+        }
+    };
+}
+
+/// Macro to parse a range of via headers
+#[macro_export]
+macro_rules! parse_via_headers {
+    ($self:expr, $headers:expr, $count:expr) => {
+        {
+            let mut result = Vec::new();
+            
+            // First parse any raw via headers
+            for i in 0..$count {
+                // Check if this header needs parsing
+                let need_to_parse = match $headers.get(i) {
+                    Some(HeaderValue::Raw(range)) => Some(*range),
+                    _ => None,
+                };
+                
+                // If we need to parse, do so
+                if let Some(range) = need_to_parse {
+                    // Create a clone for parsing
+                    let message_clone = clone_for_parsing!($self);
+                    
+                    // Parse the Via header
+                    let via_parsed = message_clone.parse_via(range)?;
+                    
+                    // Replace the raw value with the parsed one
+                    $headers[i] = HeaderValue::Via(via_parsed);
+                }
+            }
+            
+            // Now collect all parsed Via headers
+            for i in 0..$count {
+                if let HeaderValue::Via(ref via) = $headers[i] {
+                    result.push(via);
+                }
+            }
+            
+            Ok(result)
+        }
+    };
+}
+
+/// Macro to ensure a contact header is parsed at a specific index
+#[macro_export]
+macro_rules! ensure_contact_parsed {
+    ($self:expr, $index:expr) => {
+        {
+            // Skip if already parsed
+            if let HeaderValue::Address(_) = $self.contact_headers[$index] {
+                return Ok(());
+            }
+            
+            // Handle invalid header type
+            if let HeaderValue::Via(_) = $self.contact_headers[$index] {
+                return Err(ParseError::InvalidHeader {
+                    message: "Contact header incorrectly parsed as Via".to_string(),
+                    position: None,
+                });
+            }
+            
+            // Extract the range from the raw value
+            let range = if let HeaderValue::Raw(r) = $self.contact_headers[$index] {
+                r
+            } else {
+                unreachable!() // Already checked above
+            };
+            
+            // Create a clone for parsing
+            let message_clone = clone_for_parsing!($self);
+            
+            // Parse the address
+            let contact_parsed = message_clone.parse_address(range)?;
+            
+            // Update the contact header
+            $self.contact_headers[$index] = HeaderValue::Address(contact_parsed.clone());
+            
+            // Also update in main headers array for backward compatibility
+            for (name_range, value) in &mut $self.headers {
+                let name = name_range.as_str(&$self.raw_message).to_lowercase();
+                if name == "contact" {
+                    if let HeaderValue::Raw(r) = value {
+                        if *r == range {
+                            *value = HeaderValue::Address(contact_parsed.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            Ok(())
+        }
+    };
+}
+
+/// Macro to find headers by name in the headers array
+#[macro_export]
+macro_rules! find_headers_by_name {
+    ($self:expr, $name:expr) => {
+        {
+            let mut results = Vec::new();
+            for (name_range, value) in &$self.headers {
+                let header_name = name_range.as_str(&$self.raw_message).to_lowercase();
+                if header_name == $name.to_lowercase() {
+                    results.push(value);
+                }
+            }
+            results
+        }
+    };
+}
+
+/// Macro to validate a required Option-type header
+#[macro_export]
+macro_rules! validate_required_option_header {
+    ($self:expr, $header:expr, $header_name:expr) => {
+        if $header.is_none() {
+            return Err(ParseError::InvalidMessage {
+                message: format!("Missing required {} header", $header_name),
+                position: Some($self.start_line),
+            });
+        }
+    };
+}
+
+/// Macro to validate a required Vec-type header
+#[macro_export]
+macro_rules! validate_required_vec_header {
+    ($self:expr, $headers:expr, $header_name:expr) => {
+        if $headers.is_empty() {
+            return Err(ParseError::InvalidMessage {
+                message: format!("Missing required {} header", $header_name),
+                position: Some($self.start_line),
+            });
+        }
+    };
+}
+
 /// Represents the scheme part of a URI (sip, sips, tel)
 #[derive(Debug, Clone, PartialEq, Default, Display, EnumString)]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
@@ -459,47 +611,13 @@ impl SipMessage {
     fn validate_required_headers(&self) -> Result<(), ParseError> {
         // Per RFC 3261 Section 8.1.1, these headers are required in requests
         if self.is_request {
-            if self.via_headers.is_empty() {
-                return Err(ParseError::InvalidMessage {
-                    message: "Missing required Via header".to_string(),
-                    position: Some(self.start_line),
-                });
-            }
-
-            if self.to.is_none() {
-                return Err(ParseError::InvalidMessage {
-                    message: "Missing required To header".to_string(),
-                    position: Some(self.start_line),
-                });
-            }
-
-            if self.from.is_none() {
-                return Err(ParseError::InvalidMessage {
-                    message: "Missing required From header".to_string(),
-                    position: Some(self.start_line),
-                });
-            }
-
-            if self.cseq.is_none() {
-                return Err(ParseError::InvalidMessage {
-                    message: "Missing required CSeq header".to_string(),
-                    position: Some(self.start_line),
-                });
-            }
-
-            if self.call_id.is_none() {
-                return Err(ParseError::InvalidMessage {
-                    message: "Missing required Call-ID header".to_string(),
-                    position: Some(self.start_line),
-                });
-            }
-
-            if self.max_forwards.is_none() {
-                return Err(ParseError::InvalidMessage {
-                    message: "Missing required Max-Forwards header".to_string(),
-                    position: Some(self.start_line),
-                });
-            }
+            // Validate all required headers using the macros
+            validate_required_vec_header!(self, self.via_headers, "Via");
+            validate_required_option_header!(self, self.to, "To");
+            validate_required_option_header!(self, self.from, "From");
+            validate_required_option_header!(self, self.cseq, "CSeq");
+            validate_required_option_header!(self, self.call_id, "Call-ID");
+            validate_required_option_header!(self, self.max_forwards, "Max-Forwards");
         }
 
         // For responses, the requirements are slightly different, but we'll focus on requests for now
@@ -577,53 +695,23 @@ impl SipMessage {
             }
             "to" => {
                 // To header must appear exactly once
-                if self.to.is_some() {
-                    return Err(ParseError::InvalidHeader {
-                        message: "Duplicate To header".to_string(),
-                        position: Some(range),
-                    });
-                }
-                self.to = Some(HeaderValue::Raw(value_range));
+                check_duplicate_and_set!(self, self.to, value_range, "To", range);
             }
             "from" => {
                 // From header must appear exactly once
-                if self.from.is_some() {
-                    return Err(ParseError::InvalidHeader {
-                        message: "Duplicate From header".to_string(),
-                        position: Some(range),
-                    });
-                }
-                self.from = Some(HeaderValue::Raw(value_range));
+                check_duplicate_and_set!(self, self.from, value_range, "From", range);
             }
             "call-id" => {
                 // Call-ID header must appear exactly once
-                if self.call_id.is_some() {
-                    return Err(ParseError::InvalidHeader {
-                        message: "Duplicate Call-ID header".to_string(),
-                        position: Some(range),
-                    });
-                }
-                self.call_id = Some(HeaderValue::Raw(value_range));
+                check_duplicate_and_set!(self, self.call_id, value_range, "Call-ID", range);
             }
             "cseq" => {
                 // CSeq header must appear exactly once
-                if self.cseq.is_some() {
-                    return Err(ParseError::InvalidHeader {
-                        message: "Duplicate CSeq header".to_string(),
-                        position: Some(range),
-                    });
-                }
-                self.cseq = Some(HeaderValue::Raw(value_range));
+                check_duplicate_and_set!(self, self.cseq, value_range, "CSeq", range);
             }
             "max-forwards" => {
                 // Max-Forwards header must appear exactly once if present
-                if self.max_forwards.is_some() {
-                    return Err(ParseError::InvalidHeader {
-                        message: "Duplicate Max-Forwards header".to_string(),
-                        position: Some(range),
-                    });
-                }
-                self.max_forwards = Some(HeaderValue::Raw(value_range));
+                check_duplicate_and_set!(self, self.max_forwards, value_range, "Max-Forwards", range);
             }
             "event" => {
                 // Store event header in generic headers list
@@ -738,35 +826,8 @@ impl SipMessage {
 
     /// Get all Via headers, parsing them on demand
     pub fn all_vias(&mut self) -> Result<Vec<&Via>, ParseError> {
-        let mut result = Vec::new();
         let headers_count = self.via_headers.len();
-
-        // First we need to parse any raw via headers
-        for i in 0..headers_count {
-            // We need to check if this header needs parsing
-            let need_to_parse = match self.via_headers.get(i) {
-                Some(HeaderValue::Raw(range)) => Some(*range),
-                _ => None,
-            };
-
-            // If we need to parse, do so
-            if let Some(range) = need_to_parse {
-                // Parse this Via header
-                let via_parsed = self.parse_via(range)?;
-
-                // Replace the raw value with the parsed one
-                self.via_headers[i] = HeaderValue::Via(via_parsed);
-            }
-        }
-
-        // Now collect all parsed Via headers
-        for i in 0..headers_count {
-            if let HeaderValue::Via(ref via) = &self.via_headers[i] {
-                result.push(via);
-            }
-        }
-
-        Ok(result)
+        parse_via_headers!(self, self.via_headers, headers_count)
     }
 
     /// Get the To header, parsing it on demand
@@ -781,49 +842,7 @@ impl SipMessage {
 
     /// Helper method to ensure a contact header is parsed
     fn ensure_contact_header_parsed(&mut self, index: usize) -> Result<(), ParseError> {
-        // Skip if already parsed
-        if let HeaderValue::Address(_) = self.contact_headers[index] {
-            return Ok(());
-        }
-
-        // Handle invalid header type
-        if let HeaderValue::Via(_) = self.contact_headers[index] {
-            return Err(ParseError::InvalidHeader {
-                message: "Contact header incorrectly parsed as Via".to_string(),
-                position: None,
-            });
-        }
-
-        // Extract the range from the raw value
-        let range = if let HeaderValue::Raw(r) = self.contact_headers[index] {
-            r
-        } else {
-            unreachable!() // Already checked above
-        };
-
-        // Create a clone for parsing
-        let message_clone = clone_for_parsing!(self);
-
-        // Parse the address
-        let contact_parsed = message_clone.parse_address(range)?;
-
-        // Update the contact header
-        self.contact_headers[index] = HeaderValue::Address(contact_parsed.clone());
-
-        // Also update in main headers array for backward compatibility
-        for (name_range, value) in &mut self.headers {
-            let name = name_range.as_str(&self.raw_message).to_lowercase();
-            if name == "contact" {
-                if let HeaderValue::Raw(r) = value {
-                    if *r == range {
-                        *value = HeaderValue::Address(contact_parsed.clone());
-                        break;
-                    }
-                }
-            }
-        }
-
-        Ok(())
+        ensure_contact_parsed!(self, index)
     }
 
     /// Get the Contact header, parsing it on demand
@@ -888,7 +907,8 @@ impl SipMessage {
     fn find_headers_by_name<'a>(&'a self, name: &str) -> Vec<(usize, &'a HeaderValue)> {
         let mut result = Vec::new();
         for (i, (name_range, value)) in self.headers.iter().enumerate() {
-            if name_range.as_str(&self.raw_message).to_lowercase() == name {
+            let header_name = name_range.as_str(&self.raw_message).to_lowercase();
+            if header_name == name.to_lowercase() {
                 result.push((i, value));
             }
         }
