@@ -549,10 +549,12 @@ impl SipMessage {
                 self.contact_headers.push(HeaderValue::Raw(value_range));
 
                 // Check if this header has multiple entries (comma-separated values)
-                let value_str = value_range.as_str(&self.raw_message);
-                if value_str.contains(',') {
+                if self.header_value_contains(&HeaderValue::Raw(value_range), ',') {
                     self.contact_has_multiple_entries = true;
                 }
+                
+                // Also store in general headers for backward compatibility
+                self.headers.push((name_range, HeaderValue::Raw(value_range)));
             }
             _ => {
                 // Other headers
@@ -689,6 +691,11 @@ impl SipMessage {
             } else {
                 unreachable!()
             }
+        } else if let Some(HeaderValue::Via(_)) = self.to {
+            Err(ParseError::InvalidHeader {
+                message: "To header incorrectly parsed as Via".to_string(),
+                position: None,
+            })
         } else {
             Ok(None)
         }
@@ -709,11 +716,67 @@ impl SipMessage {
             } else {
                 unreachable!()
             }
+        } else if let Some(HeaderValue::Via(_)) = self.from {
+            Err(ParseError::InvalidHeader {
+                message: "From header incorrectly parsed as Via".to_string(),
+                position: None,
+            })
         } else {
             Ok(None)
         }
     }
 
+    /// Helper method to ensure a contact header is parsed
+    fn ensure_contact_header_parsed(&mut self, index: usize) -> Result<(), ParseError> {
+        // Skip if already parsed
+        if let HeaderValue::Address(_) = self.contact_headers[index] {
+            return Ok(());
+        }
+        
+        // Handle invalid header type
+        if let HeaderValue::Via(_) = self.contact_headers[index] {
+            return Err(ParseError::InvalidHeader {
+                message: "Contact header incorrectly parsed as Via".to_string(),
+                position: None,
+            });
+        }
+        
+        // Extract the range from the raw value
+        let range = if let HeaderValue::Raw(r) = self.contact_headers[index] {
+            r
+        } else {
+            unreachable!() // Already checked above
+        };
+        
+        // Clone to avoid borrowing issues
+        let raw_message_clone = self.raw_message.clone();
+        let message_clone = SipMessage {
+            raw_message: raw_message_clone,
+            ..self.clone()
+        };
+        
+        // Parse the address
+        let contact_parsed = message_clone.parse_address(range)?;
+        
+        // Update the contact header
+        self.contact_headers[index] = HeaderValue::Address(contact_parsed.clone());
+        
+        // Also update in main headers array for backward compatibility
+        for (name_range, value) in &mut self.headers {
+            let name = name_range.as_str(&self.raw_message).to_lowercase();
+            if name == "contact" {
+                if let HeaderValue::Raw(r) = value {
+                    if *r == range {
+                        *value = HeaderValue::Address(contact_parsed.clone());
+                        break;
+                    }
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
     /// Get the Contact header, parsing it on demand
     /// Returns the first contact header if multiple exist
     pub fn contact(&mut self) -> Result<Option<&Address>, ParseError> {
@@ -722,55 +785,8 @@ impl SipMessage {
             return Ok(None);
         }
 
-        // Check if we need to parse the first contact header
-        let needs_parsing = match self.contact_headers[0] {
-            HeaderValue::Address(_) => false,
-            HeaderValue::Raw(_) => true,
-            HeaderValue::Via(_) => {
-                // This should never happen for Contact headers
-                return Err(ParseError::InvalidHeader {
-                    message: "Contact header incorrectly parsed as Via".to_string(),
-                    position: None,
-                });
-            }
-        };
-
-        // Process the header if needed
-        if needs_parsing {
-            // Get the range before we borrow self mutably
-            let range = if let HeaderValue::Raw(r) = self.contact_headers[0] {
-                r
-            } else {
-                unreachable!() // We already checked this above
-            };
-
-            // Need to parse it - clone to avoid borrowing issues
-            let raw_message_clone = self.raw_message.clone();
-            let message_clone = SipMessage {
-                raw_message: raw_message_clone,
-                ..self.clone()
-            };
-
-            // Parse using the cloned message
-            let contact_parsed = message_clone.parse_address(range)?;
-
-            // Update the contact_headers array with the parsed address
-            self.contact_headers[0] = HeaderValue::Address(contact_parsed.clone());
-
-            // Also update in the main headers array for backward compatibility
-            for (name_range, value) in &mut self.headers {
-                let name = name_range.as_str(&self.raw_message).to_lowercase();
-                if name == "contact" {
-                    if let HeaderValue::Raw(r) = value {
-                        if *r == range {
-                            // This is the same header, update it
-                            *value = HeaderValue::Address(contact_parsed.clone());
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+        // Ensure the first contact header is parsed
+        self.ensure_contact_header_parsed(0)?;
 
         // Now get the reference to the parsed Address
         if let HeaderValue::Address(ref addr) = &self.contact_headers[0] {
@@ -789,46 +805,9 @@ impl SipMessage {
             return Ok(Vec::new());
         }
 
-        // Process all contact headers if needed
-        let mut processed_indices = Vec::new();
-
-        // First, identify which contact headers need parsing
-        for (i, value) in self.contact_headers.iter().enumerate() {
-            if let HeaderValue::Raw(_) = value {
-                processed_indices.push(i);
-            }
-        }
-
-        // Now parse any raw contact headers
-        for &i in &processed_indices {
-            if let HeaderValue::Raw(range) = self.contact_headers[i] {
-                // Clone to avoid borrowing issues
-                let raw_message_clone = self.raw_message.clone();
-                let message_clone = SipMessage {
-                    raw_message: raw_message_clone,
-                    ..self.clone()
-                };
-
-                // Parse the address
-                let contact_parsed = message_clone.parse_address(range)?;
-
-                // Update in the contact_headers array
-                self.contact_headers[i] = HeaderValue::Address(contact_parsed);
-
-                // Also update in main headers array for consistency
-                // Find and update the corresponding entry in headers
-                for (name_range, value) in &mut self.headers {
-                    let name = name_range.as_str(&self.raw_message).to_lowercase();
-                    if name == "contact" {
-                        if let HeaderValue::Raw(r) = value {
-                            if *r == range {
-                                *value = self.contact_headers[i].clone();
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+        // Ensure all contact headers are parsed
+        for i in 0..self.contact_headers.len() {
+            self.ensure_contact_header_parsed(i)?;
         }
 
         // Collect all parsed address references
@@ -836,13 +815,8 @@ impl SipMessage {
         for value in &self.contact_headers {
             if let HeaderValue::Address(ref addr) = value {
                 result.push(addr);
-            } else if let HeaderValue::Via(_) = value {
-                return Err(ParseError::InvalidHeader {
-                    message: "Contact header incorrectly parsed as Via".to_string(),
-                    position: None,
-                });
             }
-            // Raw values should have been processed already
+            // All values should be parsed at this point
         }
 
         Ok(result)
@@ -853,7 +827,34 @@ impl SipMessage {
     pub fn has_multiple_contacts(&self) -> bool {
         self.contact_headers.len() > 1 || self.contact_has_multiple_entries
     }
+    
+    /// Get all headers with a specific name
+    /// This is a public interface that uses the internal find_headers_by_name method
+    pub fn get_headers_by_name(&self, name: &str) -> Vec<&HeaderValue> {
+        let headers = self.find_headers_by_name(name);
+        headers.iter().map(|(_, value)| *value).collect()
+    }
 
+    /// Find all headers with the given name
+    fn find_headers_by_name<'a>(&'a self, name: &str) -> Vec<(usize, &'a HeaderValue)> {
+        let mut result = Vec::new();
+        for (i, (name_range, value)) in self.headers.iter().enumerate() {
+            if name_range.as_str(&self.raw_message).to_lowercase() == name {
+                result.push((i, value));
+            }
+        }
+        result
+    }
+    
+    /// Check if a raw header value contains a specific character
+    fn header_value_contains(&self, value: &HeaderValue, ch: char) -> bool {
+        if let HeaderValue::Raw(range) = value {
+            range.as_str(&self.raw_message).contains(ch)
+        } else {
+            false
+        }
+    }
+    
     /// Parse a Via header value
     fn parse_via(&self, range: TextRange) -> Result<Via, ParseError> {
         let via_str = range.as_str(&self.raw_message);
