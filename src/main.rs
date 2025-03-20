@@ -2,6 +2,8 @@
 //! This module provides a SIP parser with lazy parsing capabilities,
 //! optimized for B2BUA (Back-to-Back User Agent) mode.
 
+mod benchmark;
+
 use std::collections::HashMap;
 use std::fmt;
 use strum_macros::{Display, EnumString};
@@ -1571,6 +1573,12 @@ a=rtpmap:0 PCMU/8000\r\n";
     if valid_sip.parse().is_ok() {
         println!("Valid SIP response");
     }
+    
+    // Run basic benchmark
+    // benchmark::benchmark_sip_parsing();
+    
+    // Run the comprehensive benchmarks
+    benchmark::run_comprehensive_benchmark();
 }
 
 #[cfg(test)]

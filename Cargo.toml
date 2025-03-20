@@ -6,3 +6,5 @@ edition = "2021"
 [dependencies]
 strum = "0.25.0"
 strum_macros = "0.25.0"
+rayon = "1.8.0"
+num_cpus = "1.16.0"
