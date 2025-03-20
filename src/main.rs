@@ -6,6 +6,98 @@ use std::collections::HashMap;
 use std::fmt;
 use strum_macros::{Display, EnumString};
 
+/// Macro to create a clone of a SipMessage for parsing
+/// This helps avoid borrowing issues when working with headers
+#[macro_export]
+macro_rules! clone_for_parsing {
+    ($self:expr) => {
+        {
+            let raw_message_clone = $self.raw_message.clone();
+            SipMessage {
+                raw_message: raw_message_clone,
+                ..$self.clone()
+            }
+        }
+    };
+}
+
+/// Macro to handle address header (To, From, Contact) parsing logic
+#[macro_export]
+macro_rules! parse_address_header {
+    ($self:expr, $field_name:ident, $header_name:expr) => {
+        {
+            // Check if we need to parse
+            let needs_parsing = match &$self.$field_name {
+                Some(HeaderValue::Raw(range)) => Some(*range),
+                _ => None,
+            };
+
+            // Parse the header if needed
+            if let Some(range) = needs_parsing {
+                // Clone to avoid borrowing issues
+                let raw_message_clone = $self.raw_message.clone();
+                let message_clone = SipMessage {
+                    raw_message: raw_message_clone,
+                    ..$self.clone()
+                };
+
+                // Parse the address
+                let parsed = message_clone.parse_address(range)?;
+                $self.$field_name = Some(HeaderValue::Address(parsed));
+            }
+            
+            // Handle error cases and return
+            match &$self.$field_name {
+                Some(HeaderValue::Address(ref addr)) => Ok(Some(addr)),
+                Some(HeaderValue::Via(_)) => Err(ParseError::InvalidHeader {
+                    message: format!("{} header incorrectly parsed as Via", $header_name),
+                    position: None,
+                }),
+                _ => Ok(None),
+            }
+        }
+    };
+}
+
+/// Macro to check if a Header value is already parsed, and if not, parse it
+#[macro_export]
+macro_rules! ensure_header_parsed {
+    ($self:expr, $headers:expr, $index:expr, $header_type:expr, $parse_method:ident) => {
+        {
+            // Skip if already parsed
+            let needs_parsing = match $headers.get($index) {
+                Some(HeaderValue::Raw(range)) => Some(*range),
+                Some(HeaderValue::Via(_)) if $header_type != "Via" => {
+                    return Err(ParseError::InvalidHeader {
+                        message: format!("{} header incorrectly parsed as Via", $header_type),
+                        position: None,
+                    });
+                },
+                Some(HeaderValue::Address(_)) if $header_type != "Address" => {
+                    return Err(ParseError::InvalidHeader {
+                        message: format!("{} header incorrectly parsed as Address", $header_type),
+                        position: None,
+                    });
+                },
+                _ => None,
+            };
+            
+            if let Some(range) = needs_parsing {
+                // Create a clone for parsing
+                let message_clone = clone_for_parsing!($self);
+                
+                // Parse the header
+                let parsed = message_clone.$parse_method(range)?;
+                
+                // Update in the headers array
+                $headers[$index] = parsed;
+            }
+            
+            Ok(())
+        }
+    };
+}
+
 /// Represents the scheme part of a URI (sip, sips, tel)
 #[derive(Debug, Clone, PartialEq, Default, Display, EnumString)]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
@@ -552,9 +644,10 @@ impl SipMessage {
                 if self.header_value_contains(&HeaderValue::Raw(value_range), ',') {
                     self.contact_has_multiple_entries = true;
                 }
-                
+
                 // Also store in general headers for backward compatibility
-                self.headers.push((name_range, HeaderValue::Raw(value_range)));
+                self.headers
+                    .push((name_range, HeaderValue::Raw(value_range)));
             }
             _ => {
                 // Other headers
@@ -678,52 +771,12 @@ impl SipMessage {
 
     /// Get the To header, parsing it on demand
     pub fn to(&mut self) -> Result<Option<&Address>, ParseError> {
-        if let Some(HeaderValue::Address(ref addr)) = self.to {
-            Ok(Some(addr))
-        } else if let Some(HeaderValue::Raw(range)) = self.to {
-            // Lazily parse the To header
-            let to_parsed = self.parse_address(range)?;
-            self.to = Some(HeaderValue::Address(to_parsed));
-
-            // Return the parsed value
-            if let Some(HeaderValue::Address(ref addr)) = self.to {
-                Ok(Some(addr))
-            } else {
-                unreachable!()
-            }
-        } else if let Some(HeaderValue::Via(_)) = self.to {
-            Err(ParseError::InvalidHeader {
-                message: "To header incorrectly parsed as Via".to_string(),
-                position: None,
-            })
-        } else {
-            Ok(None)
-        }
+        parse_address_header!(self, to, "To")
     }
 
     /// Get the From header, parsing it on demand
     pub fn from(&mut self) -> Result<Option<&Address>, ParseError> {
-        if let Some(HeaderValue::Address(ref addr)) = self.from {
-            Ok(Some(addr))
-        } else if let Some(HeaderValue::Raw(range)) = self.from {
-            // Lazily parse the From header
-            let from_parsed = self.parse_address(range)?;
-            self.from = Some(HeaderValue::Address(from_parsed));
-
-            // Return the parsed value
-            if let Some(HeaderValue::Address(ref addr)) = self.from {
-                Ok(Some(addr))
-            } else {
-                unreachable!()
-            }
-        } else if let Some(HeaderValue::Via(_)) = self.from {
-            Err(ParseError::InvalidHeader {
-                message: "From header incorrectly parsed as Via".to_string(),
-                position: None,
-            })
-        } else {
-            Ok(None)
-        }
+        parse_address_header!(self, from, "From")
     }
 
     /// Helper method to ensure a contact header is parsed
@@ -732,7 +785,7 @@ impl SipMessage {
         if let HeaderValue::Address(_) = self.contact_headers[index] {
             return Ok(());
         }
-        
+
         // Handle invalid header type
         if let HeaderValue::Via(_) = self.contact_headers[index] {
             return Err(ParseError::InvalidHeader {
@@ -740,27 +793,23 @@ impl SipMessage {
                 position: None,
             });
         }
-        
+
         // Extract the range from the raw value
         let range = if let HeaderValue::Raw(r) = self.contact_headers[index] {
             r
         } else {
             unreachable!() // Already checked above
         };
-        
-        // Clone to avoid borrowing issues
-        let raw_message_clone = self.raw_message.clone();
-        let message_clone = SipMessage {
-            raw_message: raw_message_clone,
-            ..self.clone()
-        };
-        
+
+        // Create a clone for parsing
+        let message_clone = clone_for_parsing!(self);
+
         // Parse the address
         let contact_parsed = message_clone.parse_address(range)?;
-        
+
         // Update the contact header
         self.contact_headers[index] = HeaderValue::Address(contact_parsed.clone());
-        
+
         // Also update in main headers array for backward compatibility
         for (name_range, value) in &mut self.headers {
             let name = name_range.as_str(&self.raw_message).to_lowercase();
@@ -773,10 +822,10 @@ impl SipMessage {
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Get the Contact header, parsing it on demand
     /// Returns the first contact header if multiple exist
     pub fn contact(&mut self) -> Result<Option<&Address>, ParseError> {
@@ -827,7 +876,7 @@ impl SipMessage {
     pub fn has_multiple_contacts(&self) -> bool {
         self.contact_headers.len() > 1 || self.contact_has_multiple_entries
     }
-    
+
     /// Get all headers with a specific name
     /// This is a public interface that uses the internal find_headers_by_name method
     pub fn get_headers_by_name(&self, name: &str) -> Vec<&HeaderValue> {
@@ -845,7 +894,7 @@ impl SipMessage {
         }
         result
     }
-    
+
     /// Check if a raw header value contains a specific character
     fn header_value_contains(&self, value: &HeaderValue, ch: char) -> bool {
         if let HeaderValue::Raw(range) = value {
@@ -854,7 +903,7 @@ impl SipMessage {
             false
         }
     }
-    
+
     /// Parse a Via header value
     fn parse_via(&self, range: TextRange) -> Result<Via, ParseError> {
         let via_str = range.as_str(&self.raw_message);
