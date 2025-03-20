@@ -8,16 +8,29 @@ use strum_macros::{Display, EnumString};
 
 /// Macro to create a clone of a SipMessage for parsing
 /// This helps avoid borrowing issues when working with headers
+// Deprecated: This macro was used to create a clone of the SipMessage for parsing,
+// but it's inefficient as it clones the entire message unnecessarily.
+// Instead, we now use optimized methods that take a reference to the raw message
+// (see get_raw_message macro and methods like parse_uri_with_message).
+//#[macro_export]
+//macro_rules! clone_for_parsing {
+//    ($self:expr) => {
+//        {
+//            let raw_message_clone = $self.raw_message.clone();
+//            SipMessage {
+//                raw_message: raw_message_clone,
+//                ..$self.clone()
+//            }
+//        }
+//    };
+//}
+
+/// Macro to get a reference to the raw message string
+/// This avoids unnecessary cloning when we just need to access the raw message
 #[macro_export]
-macro_rules! clone_for_parsing {
+macro_rules! get_raw_message {
     ($self:expr) => {
-        {
-            let raw_message_clone = $self.raw_message.clone();
-            SipMessage {
-                raw_message: raw_message_clone,
-                ..$self.clone()
-            }
-        }
+        &$self.raw_message
     };
 }
 
@@ -34,15 +47,8 @@ macro_rules! parse_address_header {
 
             // Parse the header if needed
             if let Some(range) = needs_parsing {
-                // Clone to avoid borrowing issues
-                let raw_message_clone = $self.raw_message.clone();
-                let message_clone = SipMessage {
-                    raw_message: raw_message_clone,
-                    ..$self.clone()
-                };
-
-                // Parse the address
-                let parsed = message_clone.parse_address(range)?;
+                // Use the optimized method that takes a reference to raw_message
+                let parsed = $self.parse_address(range)?;
                 $self.$field_name = Some(HeaderValue::Address(parsed));
             }
             
@@ -83,11 +89,8 @@ macro_rules! ensure_header_parsed {
             };
             
             if let Some(range) = needs_parsing {
-                // Create a clone for parsing
-                let message_clone = clone_for_parsing!($self);
-                
-                // Parse the header
-                let parsed = message_clone.$parse_method(range)?;
+                // Parse the header using the optimized method
+                let parsed = $self.$parse_method(range)?;
                 
                 // Update in the headers array
                 $headers[$index] = parsed;
@@ -132,11 +135,8 @@ macro_rules! parse_via_headers {
                 
                 // If we need to parse, do so
                 if let Some(range) = need_to_parse {
-                    // Create a clone for parsing
-                    let message_clone = clone_for_parsing!($self);
-                    
-                    // Parse the Via header
-                    let via_parsed = message_clone.parse_via(range)?;
+                    // Parse the Via header using the optimized method
+                    let via_parsed = $self.parse_via(range)?;
                     
                     // Replace the raw value with the parsed one
                     $headers[i] = HeaderValue::Via(via_parsed);
@@ -180,11 +180,8 @@ macro_rules! ensure_contact_parsed {
                 unreachable!() // Already checked above
             };
             
-            // Create a clone for parsing
-            let message_clone = clone_for_parsing!($self);
-            
-            // Parse the address
-            let contact_parsed = message_clone.parse_address(range)?;
+            // Parse the address using the optimized method
+            let contact_parsed = $self.parse_address(range)?;
             
             // Update the contact header
             $self.contact_headers[$index] = HeaderValue::Address(contact_parsed.clone());
@@ -524,12 +521,10 @@ impl SipMessage {
 
         // Cache the message length to avoid multiple calls
         let message_len = self.raw_message.len();
-        let raw_message_copy = self.raw_message.clone();
-        let message_bytes = raw_message_copy.as_bytes();
 
         // Find the end of the start line
         let start_line_end =
-            raw_message_copy
+            self.raw_message
                 .find("\r\n")
                 .ok_or_else(|| ParseError::InvalidMessage {
                     message: "No CRLF after start line".to_string(),
@@ -540,10 +535,10 @@ impl SipMessage {
         self.start_line = TextRange::new(0, start_line_end);
 
         // Determine if it's a request or response
-        self.is_request = !raw_message_copy.starts_with("SIP/");
+        self.is_request = !self.raw_message.starts_with("SIP/");
 
         // Find the end of headers (double CRLF)
-        let headers_section = &raw_message_copy[start_line_end + 2..];
+        let headers_section = &self.raw_message[start_line_end + 2..];
         let body_start = if let Some(pos) = headers_section.find("\r\n\r\n") {
             start_line_end + 2 + pos + 4
         } else {
@@ -561,14 +556,14 @@ impl SipMessage {
         while pos < headers_end {
             // Look ahead to see if the next line is a continuation (folded header)
             // Optimize by using a slice of the message for finding the next line end
-            let next_line_offset = raw_message_copy[pos..].find("\r\n").unwrap_or(0);
+            let next_line_offset = self.raw_message[pos..].find("\r\n").unwrap_or(0);
             let next_line_start = pos + next_line_offset + 2;
 
             // Check if the next line is a folded header continuation
             if next_line_start < body_start
                 && next_line_start < message_len
-                && (message_bytes.get(next_line_start) == Some(&b' ')
-                    || message_bytes.get(next_line_start) == Some(&b'\t'))
+                && (self.raw_message.as_bytes().get(next_line_start) == Some(&b' ')
+                    || self.raw_message.as_bytes().get(next_line_start) == Some(&b'\t'))
             {
                 // This is a folded line, continue to next line
                 pos = next_line_start;
@@ -576,7 +571,7 @@ impl SipMessage {
             }
 
             // Find the end of the current header (including any folded lines)
-            let line_end = if let Some(end) = raw_message_copy[pos..].find("\r\n") {
+            let line_end = if let Some(end) = self.raw_message[pos..].find("\r\n") {
                 pos + end
             } else {
                 headers_end
@@ -1039,9 +1034,9 @@ impl SipMessage {
         Ok(address)
     }
 
-    /// Parse a URI
-    fn parse_uri(&self, range: TextRange) -> Result<SipUri, ParseError> {
-        let uri_str = range.as_str(&self.raw_message);
+    /// Parse a URI with an explicit raw message reference
+    fn parse_uri_with_message(&self, raw_message: &str, range: TextRange) -> Result<SipUri, ParseError> {
+        let uri_str = range.as_str(raw_message);
 
         let mut uri = SipUri::default();
 
@@ -1089,7 +1084,7 @@ impl SipMessage {
 
                 // Parse any parameters
                 let params_range = TextRange::new(rest_start + semicolon_pos, range.end);
-                self.parse_params(params_range, &mut uri.params)?;
+                self.parse_params_with_message(raw_message, params_range, &mut uri.params)?;
             } else {
                 // No parameters, the whole rest is the phone number
                 uri.user_info = Some(TextRange::new(rest_start, range.end));
@@ -1120,7 +1115,7 @@ impl SipMessage {
                 // Parse user parameters
                 let user_params_range =
                     TextRange::new(rest_start + semicolon_pos + 1, rest_start + at_pos);
-                self.parse_params(user_params_range, &mut uri.user_params)?;
+                self.parse_params_with_message(raw_message, user_params_range, &mut uri.user_params)?;
             } else {
                 uri.user_info = Some(TextRange::new(rest_start, rest_start + at_pos));
             }
@@ -1129,14 +1124,20 @@ impl SipMessage {
             let host_start = rest_start + at_pos + 1;
             // Skip directly to parsing the host part
             let host_range = TextRange::new(host_start, range.end);
-            self.parse_host_part(host_range, &mut uri)?;
+            self.parse_host_part_with_message(raw_message, host_range, &mut uri)?;
         } else {
             // No user info, just host part
             let host_range = TextRange::new(rest_start, range.end);
-            self.parse_host_part(host_range, &mut uri)?;
+            self.parse_host_part_with_message(raw_message, host_range, &mut uri)?;
         }
 
         Ok(uri)
+    }
+
+    /// Parse a URI
+    fn parse_uri(&self, range: TextRange) -> Result<SipUri, ParseError> {
+        // Use the optimized method with a reference to the raw message
+        self.parse_uri_with_message(&self.raw_message, range)
     }
 
     /// Validate the user part of a SIP URI according to RFC 3261
@@ -1217,9 +1218,9 @@ impl SipMessage {
             || c == b'/'
     }
 
-    /// Parse the host part of a URI
-    fn parse_host_part(&self, range: TextRange, uri: &mut SipUri) -> Result<(), ParseError> {
-        let host_part = range.as_str(&self.raw_message);
+    /// Parse the host part of a URI using an explicit raw message reference
+    fn parse_host_part_with_message(&self, raw_message: &str, range: TextRange, uri: &mut SipUri) -> Result<(), ParseError> {
+        let host_part = range.as_str(raw_message);
 
         // Split by semicolon (params) or question mark (headers)
         let (host_port_range, rest) = if let Some(semicolon_pos) = host_part.find(';') {
@@ -1242,7 +1243,7 @@ impl SipMessage {
             (range, None)
         };
 
-        let host_port = host_port_range.as_str(&self.raw_message);
+        let host_port = host_port_range.as_str(raw_message);
 
         // Parse host and optional port
         if let Some(colon_pos) = host_port.find(':') {
@@ -1270,12 +1271,12 @@ impl SipMessage {
             match delimiter {
                 ';' => {
                     // Parameters section
-                    let rest_str = rest_range.as_str(&self.raw_message);
+                    let rest_str = rest_range.as_str(raw_message);
                     if let Some(question_pos) = rest_str.find('?') {
                         // Both parameters and headers
                         let params_range =
                             TextRange::new(rest_range.start, rest_range.start + question_pos);
-                        self.parse_params(params_range, &mut uri.params)?;
+                        self.parse_params_with_message(raw_message, params_range, &mut uri.params)?;
 
                         // Headers
                         uri.headers = Some(TextRange::new(
@@ -1284,7 +1285,7 @@ impl SipMessage {
                         ));
                     } else {
                         // Just parameters
-                        self.parse_params(rest_range, &mut uri.params)?;
+                        self.parse_params_with_message(raw_message, rest_range, &mut uri.params)?;
                     }
                 }
                 '?' => {
@@ -1297,10 +1298,16 @@ impl SipMessage {
 
         Ok(())
     }
+    
+    /// Parse the host part of a URI
+    fn parse_host_part(&self, range: TextRange, uri: &mut SipUri) -> Result<(), ParseError> {
+        // Reuse the optimized version to avoid code duplication
+        self.parse_host_part_with_message(&self.raw_message, range, uri)
+    }
 
-    /// Parse parameters string into a HashMap
-    fn parse_params(&self, range: TextRange, params: &mut ParamMap) -> Result<(), ParseError> {
-        let params_str = range.as_str(&self.raw_message);
+    /// Parse parameters string into a HashMap using an explicit raw message reference
+    fn parse_params_with_message(&self, raw_message: &str, range: TextRange, params: &mut ParamMap) -> Result<(), ParseError> {
+        let params_str = range.as_str(raw_message);
 
         let mut start_pos = range.start;
         for param in params_str.split(';') {
@@ -1326,6 +1333,12 @@ impl SipMessage {
         }
 
         Ok(())
+    }
+
+    /// Parse parameters string into a HashMap
+    fn parse_params(&self, range: TextRange, params: &mut ParamMap) -> Result<(), ParseError> {
+        // Use the optimized version to avoid code duplication
+        self.parse_params_with_message(&self.raw_message, range, params)
     }
 
     /// Helper to get string value from TextRange
@@ -2252,7 +2265,8 @@ CSeq: 314159 INVITE\r
             .process_header_line(TextRange::new(0, input.len()))
             .unwrap();
 
-        // Clone the raw message to avoid borrowing conflicts
+        // In test methods, we need to clone to avoid borrowing conflicts
+        // This is only in tests, not performance-critical code
         let raw_message = message.raw_message.clone();
 
         // Now we can safely get the From header and use raw_message in closures
@@ -2303,7 +2317,8 @@ CSeq: 314159 INVITE\r
             .process_header_line(TextRange::new(0, input.len()))
             .unwrap();
 
-        // Clone the raw message to avoid borrowing conflicts
+        // In test methods, we need to clone to avoid borrowing conflicts
+        // This is only in tests, not performance-critical code
         let raw_message = message.raw_message.clone();
 
         // Check that we can extract the From header
@@ -2324,7 +2339,8 @@ CSeq: 314159 INVITE\r
             .process_header_line(TextRange::new(0, input.len()))
             .unwrap();
 
-        // Clone the raw message to avoid borrowing conflicts
+        // In test methods, we need to clone to avoid borrowing conflicts
+        // This is only in tests, not performance-critical code
         let raw_message = message.raw_message.clone();
 
         // Check that we can extract the From header
@@ -2345,7 +2361,8 @@ CSeq: 314159 INVITE\r
             .process_header_line(TextRange::new(0, input.len()))
             .unwrap();
 
-        // Clone the raw message to avoid borrowing conflicts
+        // In test methods, we need to clone to avoid borrowing conflicts
+        // This is only in tests, not performance-critical code
         let raw_message = message.raw_message.clone();
 
         // Get the Contact header directly using contact() method
@@ -2378,7 +2395,8 @@ CSeq: 314159 INVITE\r
             .process_header_line(TextRange::new(0, input.len()))
             .unwrap();
 
-        // Clone the raw message to avoid borrowing conflicts
+        // In test methods, we need to clone to avoid borrowing conflicts
+        // This is only in tests, not performance-critical code
         let raw_message = message.raw_message.clone();
 
         // Get the Contact header directly using contact() method
@@ -2412,7 +2430,8 @@ CSeq: 314159 INVITE\r
             .process_header_line(TextRange::new(0, input.len()))
             .unwrap();
 
-        // Clone the raw message to avoid borrowing conflicts
+        // In test methods, we need to clone to avoid borrowing conflicts
+        // This is only in tests, not performance-critical code
         let raw_message = message.raw_message.clone();
 
         // Get the To header directly using to() method
@@ -2445,7 +2464,8 @@ CSeq: 314159 INVITE\r
             .process_header_line(TextRange::new(0, input.len()))
             .unwrap();
 
-        // Clone the raw message to avoid borrowing conflicts
+        // In test methods, we need to clone to avoid borrowing conflicts
+        // This is only in tests, not performance-critical code
         let raw_message = message.raw_message.clone();
 
         // Get the Contact header directly using contact() method
@@ -2469,7 +2489,8 @@ CSeq: 314159 INVITE\r
             .process_header_line(TextRange::new(0, input.len()))
             .unwrap();
 
-        // Clone the raw message to avoid borrowing conflicts
+        // In test methods, we need to clone to avoid borrowing conflicts
+        // This is only in tests, not performance-critical code
         let raw_message = message.raw_message.clone();
 
         // Get the Contact header directly using contact() method
@@ -2512,7 +2533,8 @@ CSeq: 314159 INVITE\r
             .process_header_line(TextRange::new(0, input.len()))
             .unwrap();
 
-        // Clone the raw message to avoid borrowing conflicts
+        // In test methods, we need to clone to avoid borrowing conflicts
+        // This is only in tests, not performance-critical code
         let raw_message = message.raw_message.clone();
 
         // Get the Via header
@@ -2545,7 +2567,8 @@ CSeq: 314159 INVITE\r
             .process_header_line(TextRange::new(0, input.len()))
             .unwrap();
 
-        // Clone the raw message to avoid borrowing conflicts
+        // In test methods, we need to clone to avoid borrowing conflicts
+        // This is only in tests, not performance-critical code
         let raw_message = message.raw_message.clone();
 
         // Get the Contact header directly using contact() method
