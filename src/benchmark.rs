@@ -1,5 +1,8 @@
 use crate::SipMessage;
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use std::thread;
 use std::time::Instant;
 
@@ -37,7 +40,7 @@ Content-Length: 0\r\n\r\n";
 
     // Create a counter for successful parses (useful for verification)
     let successful_parses = AtomicUsize::new(0);
-    
+
     // Run the first iteration separately to check the results
     {
         let mut message = SipMessage::new_from_str(simple_message);
@@ -45,19 +48,22 @@ Content-Length: 0\r\n\r\n";
         let to_result = message.to();
         println!("To header after explicit call: {:?}", to_result);
     }
-    
+
     // Run the benchmark serially (for compatibility)
     println!("Note: This function uses a serial implementation now. Use run_comprehensive_benchmark for parallel execution.");
-    
+
     for _ in 0..ITERATIONS {
         let mut message = SipMessage::new_from_str(simple_message);
         if message.parse().is_ok() && message.to().is_ok() {
             successful_parses.fetch_add(1, Ordering::Relaxed);
         }
     }
-    
+
     // Report successful parses as a sanity check
-    println!("\nSuccessful parses: {}", successful_parses.load(Ordering::Relaxed));
+    println!(
+        "\nSuccessful parses: {}",
+        successful_parses.load(Ordering::Relaxed)
+    );
 
     // Calculate elapsed time
     let duration = start.elapsed();
@@ -69,7 +75,7 @@ Content-Length: 0\r\n\r\n";
         "Parses per second: {:.2}",
         ITERATIONS as f64 / duration.as_secs_f64()
     );
-    
+
     // Calculate throughput in MB/s
     let message_size = simple_message.len();
     let total_bytes = ITERATIONS * message_size;
@@ -81,11 +87,11 @@ Content-Length: 0\r\n\r\n";
 /// Run a comprehensive benchmark that tests different aspects of SIP parsing
 pub fn run_comprehensive_benchmark() {
     println!(">>>> Running Manual Thread-Based SIP Parsing Benchmark <<<<");
-    
+
     // Get the number of available CPU cores
     let num_cores = num_cpus::get();
     println!("Running on {} CPU cores", num_cores);
-    
+
     // Benchmark with different message types and sizes
     benchmark_manual_threads(BenchmarkType::ParsingOnly);
     benchmark_manual_threads(BenchmarkType::HeaderAccess);
@@ -104,43 +110,42 @@ enum BenchmarkType {
 fn benchmark_manual_threads(benchmark_type: BenchmarkType) {
     // Constants
     const ITERATIONS_PER_THREAD: usize = 1_000_000;
-    
+
     // Print benchmark type
     let (title, message) = match benchmark_type {
-        BenchmarkType::ParsingOnly => {
-            ("Parsing Only (no header access)", create_simple_sip_message())
-        },
-        BenchmarkType::HeaderAccess => {
-            ("Header Access", create_simple_sip_message())
-        },
-        BenchmarkType::ComplexMessage => {
-            ("Complex SIP Message", create_complex_sip_message())
-        },
+        BenchmarkType::ParsingOnly => (
+            "Parsing Only (no header access)",
+            create_simple_sip_message(),
+        ),
+        BenchmarkType::HeaderAccess => ("Header Access", create_simple_sip_message()),
+        BenchmarkType::ComplexMessage => ("Complex SIP Message", create_complex_sip_message()),
     };
-    
+
     println!("\n--- Benchmark: {} ---", title);
-    
+
     // Get the number of available CPU cores
     let num_cores = num_cpus::get();
     let total_iterations = ITERATIONS_PER_THREAD * num_cores;
-    println!("Running {} iterations ({} per thread on {} threads)", 
-             total_iterations, ITERATIONS_PER_THREAD, num_cores);
-    
+    println!(
+        "Running {} iterations ({} per thread on {} threads)",
+        total_iterations, ITERATIONS_PER_THREAD, num_cores
+    );
+
     // Create thread-safe message reference
     let message = Arc::new(message);
-    
+
     // Create a counter for successful parses
     let successful_parses = Arc::new(AtomicUsize::new(0));
-    
+
     // Start timing
     let start = Instant::now();
-    
+
     // Spawn one thread per CPU core
     let mut handles = vec![];
     for _ in 0..num_cores {
         let message_clone = Arc::clone(&message);
         let counter_clone = Arc::clone(&successful_parses);
-        
+
         let handle = thread::spawn(move || {
             // Run the specified number of iterations in this thread
             for _ in 0..ITERATIONS_PER_THREAD {
@@ -151,7 +156,7 @@ fn benchmark_manual_threads(benchmark_type: BenchmarkType) {
                         if sip_message.parse().is_ok() {
                             counter_clone.fetch_add(1, Ordering::Relaxed);
                         }
-                    },
+                    }
                     BenchmarkType::HeaderAccess => {
                         // Parse and access headers
                         let mut sip_message = SipMessage::new_from_str(&message_clone);
@@ -161,7 +166,7 @@ fn benchmark_manual_threads(benchmark_type: BenchmarkType) {
                             let _ = sip_message.contact();
                             counter_clone.fetch_add(1, Ordering::Relaxed);
                         }
-                    },
+                    }
                     BenchmarkType::ComplexMessage => {
                         // Parse complex message and access headers
                         let mut sip_message = SipMessage::new_from_str(&message_clone);
@@ -171,33 +176,39 @@ fn benchmark_manual_threads(benchmark_type: BenchmarkType) {
                             let _ = sip_message.via();
                             counter_clone.fetch_add(1, Ordering::Relaxed);
                         }
-                    },
+                    }
                 }
             }
         });
-        
+
         handles.push(handle);
     }
-    
+
     // Wait for all threads to complete
     for handle in handles {
         handle.join().unwrap();
     }
-    
+
     // Calculate elapsed time
     let duration = start.elapsed();
-    
+
     // Print results
     print_benchmark_results(duration, total_iterations, message.len());
-    println!("Successful parses: {}", successful_parses.load(Ordering::Relaxed));
+    println!(
+        "Successful parses: {}",
+        successful_parses.load(Ordering::Relaxed)
+    );
 }
 
 /// Helper function to print benchmark results
 fn print_benchmark_results(duration: std::time::Duration, iterations: usize, message_size: usize) {
     println!("Time elapsed: {:?}", duration);
     println!("Average time per parse: {:?}", duration / iterations as u32);
-    println!("Parses per second: {:.2}", iterations as f64 / duration.as_secs_f64());
-    
+    println!(
+        "Parses per second: {:.2}",
+        iterations as f64 / duration.as_secs_f64()
+    );
+
     // Calculate throughput
     let total_bytes = iterations * message_size;
     let throughput_mbps = (total_bytes as f64 / 1_000_000.0) / duration.as_secs_f64();
@@ -215,7 +226,8 @@ From: Alice <sip:alice@atlanta.com>;tag=1928301774\r\n\
 Call-ID: a84b4c76e66710@pc33.atlanta.com\r\n\
 CSeq: 314159 INVITE\r\n\
 Contact: <sip:alice@pc33.atlanta.com>\r\n\
-Content-Length: 0\r\n\r\n".to_string()
+Content-Length: 0\r\n\r\n"
+        .to_string()
 }
 
 /// Create a more complex SIP message with more headers and a body
@@ -239,5 +251,6 @@ s=Session SDP\r\n\
 c=IN IP4 pc33.atlanta.com\r\n\
 t=0 0\r\n\
 m=audio 49170 RTP/AVP 0\r\n\
-a=rtpmap:0 PCMU/8000\r\n".to_string()
+a=rtpmap:0 PCMU/8000\r\n"
+        .to_string()
 }

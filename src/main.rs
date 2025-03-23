@@ -39,188 +39,176 @@ macro_rules! get_raw_message {
 /// Macro to handle address header (To, From, Contact) parsing logic
 #[macro_export]
 macro_rules! parse_address_header {
-    ($self:expr, $field_name:ident, $header_name:expr) => {
-        {
-            // Check if we need to parse
-            let needs_parsing = match &$self.$field_name {
-                Some(HeaderValue::Raw(range)) => Some(*range),
-                _ => None,
-            };
+    ($self:expr, $field_name:ident, $header_name:expr) => {{
+        // Check if we need to parse
+        let needs_parsing = match &$self.$field_name {
+            Some(HeaderValue::Raw(range)) => Some(*range),
+            _ => None,
+        };
 
-            // Parse the header if needed
-            if let Some(range) = needs_parsing {
-                // Use the optimized method that takes a reference to raw_message
-                let parsed = $self.parse_address(range)?;
-                $self.$field_name = Some(HeaderValue::Address(parsed));
-            }
-            
-            // Handle error cases and return
-            match &$self.$field_name {
-                Some(HeaderValue::Address(ref addr)) => Ok(Some(addr)),
-                Some(HeaderValue::Via(_)) => Err(ParseError::InvalidHeader {
-                    message: format!("{} header incorrectly parsed as Via", $header_name),
-                    position: None,
-                }),
-                _ => Ok(None),
-            }
+        // Parse the header if needed
+        if let Some(range) = needs_parsing {
+            // Use the optimized method that takes a reference to raw_message
+            let parsed = $self.parse_address(range)?;
+            $self.$field_name = Some(HeaderValue::Address(parsed));
         }
-    };
+
+        // Handle error cases and return
+        match &$self.$field_name {
+            Some(HeaderValue::Address(ref addr)) => Ok(Some(addr)),
+            Some(HeaderValue::Via(_)) => Err(ParseError::InvalidHeader {
+                message: format!("{} header incorrectly parsed as Via", $header_name),
+                position: None,
+            }),
+            _ => Ok(None),
+        }
+    }};
 }
 
 /// Macro to check if a Header value is already parsed, and if not, parse it
 #[macro_export]
 macro_rules! ensure_header_parsed {
-    ($self:expr, $headers:expr, $index:expr, $header_type:expr, $parse_method:ident) => {
-        {
-            // Skip if already parsed
-            let needs_parsing = match $headers.get($index) {
-                Some(HeaderValue::Raw(range)) => Some(*range),
-                Some(HeaderValue::Via(_)) if $header_type != "Via" => {
-                    return Err(ParseError::InvalidHeader {
-                        message: format!("{} header incorrectly parsed as Via", $header_type),
-                        position: None,
-                    });
-                },
-                Some(HeaderValue::Address(_)) if $header_type != "Address" => {
-                    return Err(ParseError::InvalidHeader {
-                        message: format!("{} header incorrectly parsed as Address", $header_type),
-                        position: None,
-                    });
-                },
-                _ => None,
-            };
-            
-            if let Some(range) = needs_parsing {
-                // Parse the header using the optimized method
-                let parsed = $self.$parse_method(range)?;
-                
-                // Update in the headers array
-                $headers[$index] = parsed;
+    ($self:expr, $headers:expr, $index:expr, $header_type:expr, $parse_method:ident) => {{
+        // Skip if already parsed
+        let needs_parsing = match $headers.get($index) {
+            Some(HeaderValue::Raw(range)) => Some(*range),
+            Some(HeaderValue::Via(_)) if $header_type != "Via" => {
+                return Err(ParseError::InvalidHeader {
+                    message: format!("{} header incorrectly parsed as Via", $header_type),
+                    position: None,
+                });
             }
-            
-            Ok(())
+            Some(HeaderValue::Address(_)) if $header_type != "Address" => {
+                return Err(ParseError::InvalidHeader {
+                    message: format!("{} header incorrectly parsed as Address", $header_type),
+                    position: None,
+                });
+            }
+            _ => None,
+        };
+
+        if let Some(range) = needs_parsing {
+            // Parse the header using the optimized method
+            let parsed = $self.$parse_method(range)?;
+
+            // Update in the headers array
+            $headers[$index] = parsed;
         }
-    };
+
+        Ok(())
+    }};
 }
 
 /// Macro to check for duplicate headers and set header value
 #[macro_export]
 macro_rules! check_duplicate_and_set {
-    ($self:expr, $header_field:expr, $value_range:expr, $header_name:expr, $range:expr) => {
-        {
-            // Check for duplicate header
-            if $header_field.is_some() {
-                return Err(ParseError::InvalidHeader {
-                    message: format!("Duplicate {} header", $header_name),
-                    position: Some($range),
-                });
-            }
-            $header_field = Some(HeaderValue::Raw($value_range));
+    ($self:expr, $header_field:expr, $value_range:expr, $header_name:expr, $range:expr) => {{
+        // Check for duplicate header
+        if $header_field.is_some() {
+            return Err(ParseError::InvalidHeader {
+                message: format!("Duplicate {} header", $header_name),
+                position: Some($range),
+            });
         }
-    };
+        $header_field = Some(HeaderValue::Raw($value_range));
+    }};
 }
 
 /// Macro to parse a range of via headers
 #[macro_export]
 macro_rules! parse_via_headers {
-    ($self:expr, $headers:expr, $count:expr) => {
-        {
-            let mut result = Vec::new();
-            
-            // First parse any raw via headers
-            for i in 0..$count {
-                // Check if this header needs parsing
-                let need_to_parse = match $headers.get(i) {
-                    Some(HeaderValue::Raw(range)) => Some(*range),
-                    _ => None,
-                };
-                
-                // If we need to parse, do so
-                if let Some(range) = need_to_parse {
-                    // Parse the Via header using the optimized method
-                    let via_parsed = $self.parse_via(range)?;
-                    
-                    // Replace the raw value with the parsed one
-                    $headers[i] = HeaderValue::Via(via_parsed);
-                }
+    ($self:expr, $headers:expr, $count:expr) => {{
+        let mut result = Vec::new();
+
+        // First parse any raw via headers
+        for i in 0..$count {
+            // Check if this header needs parsing
+            let need_to_parse = match $headers.get(i) {
+                Some(HeaderValue::Raw(range)) => Some(*range),
+                _ => None,
+            };
+
+            // If we need to parse, do so
+            if let Some(range) = need_to_parse {
+                // Parse the Via header using the optimized method
+                let via_parsed = $self.parse_via(range)?;
+
+                // Replace the raw value with the parsed one
+                $headers[i] = HeaderValue::Via(via_parsed);
             }
-            
-            // Now collect all parsed Via headers
-            for i in 0..$count {
-                if let HeaderValue::Via(ref via) = $headers[i] {
-                    result.push(via);
-                }
-            }
-            
-            Ok(result)
         }
-    };
+
+        // Now collect all parsed Via headers
+        for i in 0..$count {
+            if let HeaderValue::Via(ref via) = $headers[i] {
+                result.push(via);
+            }
+        }
+
+        Ok(result)
+    }};
 }
 
 /// Macro to ensure a contact header is parsed at a specific index
 #[macro_export]
 macro_rules! ensure_contact_parsed {
-    ($self:expr, $index:expr) => {
-        {
-            // Skip if already parsed
-            if let HeaderValue::Address(_) = $self.contact_headers[$index] {
-                return Ok(());
-            }
-            
-            // Handle invalid header type
-            if let HeaderValue::Via(_) = $self.contact_headers[$index] {
-                return Err(ParseError::InvalidHeader {
-                    message: "Contact header incorrectly parsed as Via".to_string(),
-                    position: None,
-                });
-            }
-            
-            // Extract the range from the raw value
-            let range = if let HeaderValue::Raw(r) = $self.contact_headers[$index] {
-                r
-            } else {
-                unreachable!() // Already checked above
-            };
-            
-            // Parse the address using the optimized method
-            let contact_parsed = $self.parse_address(range)?;
-            
-            // Update the contact header
-            $self.contact_headers[$index] = HeaderValue::Address(contact_parsed.clone());
-            
-            // Also update in main headers array for backward compatibility
-            for (name_range, value) in &mut $self.headers {
-                let name = name_range.as_str(&$self.raw_message).to_lowercase();
-                if name == "contact" {
-                    if let HeaderValue::Raw(r) = value {
-                        if *r == range {
-                            *value = HeaderValue::Address(contact_parsed.clone());
-                            break;
-                        }
+    ($self:expr, $index:expr) => {{
+        // Skip if already parsed
+        if let HeaderValue::Address(_) = $self.contact_headers[$index] {
+            return Ok(());
+        }
+
+        // Handle invalid header type
+        if let HeaderValue::Via(_) = $self.contact_headers[$index] {
+            return Err(ParseError::InvalidHeader {
+                message: "Contact header incorrectly parsed as Via".to_string(),
+                position: None,
+            });
+        }
+
+        // Extract the range from the raw value
+        let range = if let HeaderValue::Raw(r) = $self.contact_headers[$index] {
+            r
+        } else {
+            unreachable!() // Already checked above
+        };
+
+        // Parse the address using the optimized method
+        let contact_parsed = $self.parse_address(range)?;
+
+        // Update the contact header
+        $self.contact_headers[$index] = HeaderValue::Address(contact_parsed.clone());
+
+        // Also update in main headers array for backward compatibility
+        for (name_range, value) in &mut $self.headers {
+            let name = name_range.as_str(&$self.raw_message).to_lowercase();
+            if name == "contact" {
+                if let HeaderValue::Raw(r) = value {
+                    if *r == range {
+                        *value = HeaderValue::Address(contact_parsed.clone());
+                        break;
                     }
                 }
             }
-            
-            Ok(())
         }
-    };
+
+        Ok(())
+    }};
 }
 
 /// Macro to find headers by name in the headers array
 #[macro_export]
 macro_rules! find_headers_by_name {
-    ($self:expr, $name:expr) => {
-        {
-            let mut results = Vec::new();
-            for (name_range, value) in &$self.headers {
-                let header_name = name_range.as_str(&$self.raw_message).to_lowercase();
-                if header_name == $name.to_lowercase() {
-                    results.push(value);
-                }
+    ($self:expr, $name:expr) => {{
+        let mut results = Vec::new();
+        for (name_range, value) in &$self.headers {
+            let header_name = name_range.as_str(&$self.raw_message).to_lowercase();
+            if header_name == $name.to_lowercase() {
+                results.push(value);
             }
-            results
         }
-    };
+        results
+    }};
 }
 
 /// Macro to validate a required Option-type header
@@ -309,6 +297,8 @@ pub struct SipUri {
 /// Represents a SIP address, used in headers like To, From, etc.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Address {
+    /// The full address text range
+    pub full_range: TextRange,
     pub display_name: Option<TextRange>,
     pub uri: SipUri,
     pub params: ParamMap,
@@ -317,6 +307,8 @@ pub struct Address {
 /// Represents Via header fields
 #[derive(Debug, Clone, PartialEq)]
 pub struct Via {
+    /// The full Via header text range
+    pub full_range: TextRange,
     pub sent_protocol: TextRange,
     pub sent_by: TextRange,
     pub params: ParamMap,
@@ -708,7 +700,13 @@ impl SipMessage {
             }
             "max-forwards" => {
                 // Max-Forwards header must appear exactly once if present
-                check_duplicate_and_set!(self, self.max_forwards, value_range, "Max-Forwards", range);
+                check_duplicate_and_set!(
+                    self,
+                    self.max_forwards,
+                    value_range,
+                    "Max-Forwards",
+                    range
+                );
             }
             "event" => {
                 // Store event header in generic headers list
@@ -949,6 +947,7 @@ impl SipMessage {
         }
 
         Ok(Via {
+            full_range: range,
             sent_protocol: protocol_range,
             sent_by: sent_by_range,
             params,
@@ -960,6 +959,7 @@ impl SipMessage {
         let addr_str = range.as_str(&self.raw_message);
 
         let mut address = Address {
+            full_range: range,
             display_name: None,
             uri: SipUri::default(),
             params: HashMap::new(),
@@ -1037,7 +1037,11 @@ impl SipMessage {
     }
 
     /// Parse a URI with an explicit raw message reference
-    fn parse_uri_with_message(&self, raw_message: &str, range: TextRange) -> Result<SipUri, ParseError> {
+    fn parse_uri_with_message(
+        &self,
+        raw_message: &str,
+        range: TextRange,
+    ) -> Result<SipUri, ParseError> {
         let uri_str = range.as_str(raw_message);
 
         let mut uri = SipUri::default();
@@ -1117,7 +1121,11 @@ impl SipMessage {
                 // Parse user parameters
                 let user_params_range =
                     TextRange::new(rest_start + semicolon_pos + 1, rest_start + at_pos);
-                self.parse_params_with_message(raw_message, user_params_range, &mut uri.user_params)?;
+                self.parse_params_with_message(
+                    raw_message,
+                    user_params_range,
+                    &mut uri.user_params,
+                )?;
             } else {
                 uri.user_info = Some(TextRange::new(rest_start, rest_start + at_pos));
             }
@@ -1221,7 +1229,12 @@ impl SipMessage {
     }
 
     /// Parse the host part of a URI using an explicit raw message reference
-    fn parse_host_part_with_message(&self, raw_message: &str, range: TextRange, uri: &mut SipUri) -> Result<(), ParseError> {
+    fn parse_host_part_with_message(
+        &self,
+        raw_message: &str,
+        range: TextRange,
+        uri: &mut SipUri,
+    ) -> Result<(), ParseError> {
         let host_part = range.as_str(raw_message);
 
         // Split by semicolon (params) or question mark (headers)
@@ -1300,15 +1313,20 @@ impl SipMessage {
 
         Ok(())
     }
-    
+
     /// Parse the host part of a URI
-    fn parse_host_part(&self, range: TextRange, uri: &mut SipUri) -> Result<(), ParseError> {
-        // Reuse the optimized version to avoid code duplication
-        self.parse_host_part_with_message(&self.raw_message, range, uri)
-    }
+    // fn parse_host_part(&self, range: TextRange, uri: &mut SipUri) -> Result<(), ParseError> {
+    //     // Reuse the optimized version to avoid code duplication
+    //     self.parse_host_part_with_message(&self.raw_message, range, uri)
+    // }
 
     /// Parse parameters string into a HashMap using an explicit raw message reference
-    fn parse_params_with_message(&self, raw_message: &str, range: TextRange, params: &mut ParamMap) -> Result<(), ParseError> {
+    fn parse_params_with_message(
+        &self,
+        raw_message: &str,
+        range: TextRange,
+        params: &mut ParamMap,
+    ) -> Result<(), ParseError> {
         let params_str = range.as_str(raw_message);
 
         let mut start_pos = range.start;
@@ -1573,10 +1591,10 @@ a=rtpmap:0 PCMU/8000\r\n";
     if valid_sip.parse().is_ok() {
         println!("Valid SIP response");
     }
-    
+
     // Run basic benchmark
     // benchmark::benchmark_sip_parsing();
-    
+
     // Run the comprehensive benchmarks
     benchmark::run_comprehensive_benchmark();
 }
@@ -1584,6 +1602,157 @@ a=rtpmap:0 PCMU/8000\r\n";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_full_address_range() {
+        let address_str = "Alice <sip:alice@atlanta.com>;tag=1928301774";
+        let message = format!("INVITE sip:bob@example.com SIP/2.0\r\nFrom: {}\r\nTo: <sip:bob@example.com>\r\nCall-ID: 12345\r\nCSeq: 1 INVITE\r\nVia: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r\nMax-Forwards: 70\r\n\r\n", address_str);
+
+        let mut sip_message = SipMessage::new_from_str(&message);
+        assert!(sip_message.parse().is_ok());
+
+        // Get the From header and copy the ranges we need to test
+        let full_range;
+        let display_name;
+        let host;
+
+        // Using a block to limit the scope of the borrow
+        {
+            let from = sip_message.from().unwrap().expect("From header not found");
+            full_range = from.full_range;
+            display_name = from.display_name;
+            host = from.uri.host;
+        }
+
+        // Now we can use get_str without borrowing issues
+        let actual_address = sip_message.get_str(full_range);
+        assert_eq!(
+            actual_address, address_str,
+            "Full address range does not match expected text"
+        );
+
+        // Verify that the display name is a subset of the full range
+        if let Some(name_range) = display_name {
+            assert!(
+                name_range.start >= full_range.start,
+                "Display name starts before full range"
+            );
+            assert!(
+                name_range.end <= full_range.end,
+                "Display name extends beyond full range"
+            );
+            assert_eq!(
+                sip_message.get_str(name_range),
+                "Alice",
+                "Display name text doesn't match"
+            );
+        } else {
+            panic!("Display name not found");
+        }
+
+        // Verify that host is within the full range
+        if let Some(host_range) = host {
+            assert!(
+                host_range.start >= full_range.start,
+                "Host starts before full range"
+            );
+            assert!(
+                host_range.end <= full_range.end,
+                "Host extends beyond full range"
+            );
+            assert_eq!(
+                sip_message.get_str(host_range),
+                "atlanta.com",
+                "Host text doesn't match"
+            );
+        }
+    }
+
+    #[test]
+    fn test_full_via_range() {
+        let via_str = "SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds";
+        let message = format!("INVITE sip:bob@example.com SIP/2.0\r\nVia: {}\r\nFrom: Alice <sip:alice@atlanta.com>;tag=1928301774\r\nTo: <sip:bob@example.com>\r\nCall-ID: 12345\r\nCSeq: 1 INVITE\r\nMax-Forwards: 70\r\n\r\n", via_str);
+
+        let mut sip_message = SipMessage::new_from_str(&message);
+        assert!(sip_message.parse().is_ok());
+
+        // Get the Via header data we need for testing
+        let full_range;
+        let sent_protocol;
+        let sent_by;
+        let params;
+
+        // Using a block to limit the scope of the borrow
+        {
+            let via = sip_message.via().unwrap().expect("Via header not found");
+            full_range = via.full_range;
+            sent_protocol = via.sent_protocol;
+            sent_by = via.sent_by;
+            params = via.params.clone(); // Clone the params map to avoid borrow issues
+        }
+
+        // Now we can use get_str without borrowing issues
+        let actual_via = sip_message.get_str(full_range);
+        assert_eq!(
+            actual_via, via_str,
+            "Full Via range doesn't match expected text"
+        );
+
+        // Verify that the sent_protocol is within the full range
+        assert!(
+            sent_protocol.start >= full_range.start,
+            "Protocol starts before full range"
+        );
+        assert!(
+            sent_protocol.end <= full_range.end,
+            "Protocol extends beyond full range"
+        );
+        assert_eq!(
+            sip_message.get_str(sent_protocol),
+            "SIP/2.0/UDP",
+            "Protocol text doesn't match"
+        );
+
+        // Verify that the sent_by is within the full range
+        assert!(
+            sent_by.start >= full_range.start,
+            "Sent-by starts before full range"
+        );
+        assert!(
+            sent_by.end <= full_range.end,
+            "Sent-by extends beyond full range"
+        );
+        assert_eq!(
+            sip_message.get_str(sent_by),
+            "pc33.atlanta.com",
+            "Sent-by text doesn't match"
+        );
+
+        // Verify that the branch parameter exists and is within the full range
+        let mut found_branch = false;
+        for (k, v) in params.iter() {
+            if sip_message.get_str(*k) == "branch" {
+                if let Some(branch) = v {
+                    found_branch = true;
+                    assert!(
+                        branch.start >= full_range.start,
+                        "Branch param starts before full range"
+                    );
+                    assert!(
+                        branch.end <= full_range.end,
+                        "Branch param extends beyond full range"
+                    );
+                    assert_eq!(
+                        sip_message.get_str(*branch),
+                        "z9hG4bK776asdhds",
+                        "Branch param text doesn't match"
+                    );
+                }
+            }
+        }
+
+        assert!(found_branch, "Branch parameter not found");
+    }
 
     #[test]
     fn test_parse_simple_message() {
