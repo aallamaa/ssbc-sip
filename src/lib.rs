@@ -5,6 +5,17 @@
 
 mod benchmark;
 mod main_impl;
+pub mod modification;
+pub mod parsing;
+pub mod headers;
+pub mod types;
 
-pub use main_impl::*;
+// Re-export core types and functionality
+pub use types::*;
+// pub use parsing::*; // Only contains macros now, which are re-exported via main_impl
+pub use headers::*;
+pub use modification::*;
 pub use benchmark::*;
+
+// Legacy compatibility - continue to export from main_impl for any remaining functionality
+pub use main_impl::*;
