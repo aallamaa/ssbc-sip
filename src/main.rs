@@ -1,4 +1,3 @@
-use ssbc::*;
 
 fn main() {
     println!("SSBC SIP Stack");
