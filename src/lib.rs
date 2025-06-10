@@ -9,6 +9,13 @@ pub mod modification;
 pub mod parsing;
 pub mod headers;
 pub mod types;
+pub mod zero_copy;
+pub mod sdp;
+pub mod error;
+pub mod b2bua;
+pub mod pool;
+pub mod limits;
+pub mod validation;
 
 // Re-export core types and functionality
 pub use types::*;
@@ -16,6 +23,11 @@ pub use types::*;
 pub use headers::*;
 pub use modification::*;
 pub use benchmark::*;
+pub use zero_copy::*;
+pub use sdp::*;
+pub use error::*;
+pub use b2bua::*;
+pub use pool::*;
 
 // Legacy compatibility - continue to export from main_impl for any remaining functionality
 pub use main_impl::*;

@@ -186,7 +186,7 @@ pub mod message_modifier {
 
 /// SIP message building utilities
 pub mod message_builder {
-    use crate::{Method, SipUri, ParseError, Scheme};
+    use crate::{Method, SipUri, Scheme, error::SsbcError};
     use std::collections::HashMap;
     
     /// SIP message builder for constructing SIP requests and responses
@@ -288,7 +288,7 @@ pub mod message_builder {
         }
         
         /// Build the final SIP message
-        pub fn build(self) -> Result<String, ParseError> {
+        pub fn build(self) -> Result<String, SsbcError> {
             let mut lines = Vec::new();
             
             // Add start line
@@ -300,9 +300,10 @@ pub mod message_builder {
                     lines.push(format!("SIP/2.0 {} {}", code, reason));
                 }
                 MessageType::None => {
-                    return Err(ParseError::InvalidMessage {
+                    return Err(SsbcError::ParseError {
                         message: "Message type not specified (use method() or response())".to_string(),
                         position: None,
+                        context: None,
                     });
                 }
             }
@@ -418,10 +419,11 @@ pub mod message_builder {
         }
         
         /// Build the final SIP request
-        pub fn build(self) -> Result<String, ParseError> {
-            let uri = self.uri.ok_or_else(|| ParseError::InvalidMessage {
+        pub fn build(self) -> Result<String, SsbcError> {
+            let uri = self.uri.ok_or_else(|| SsbcError::ParseError {
                 message: "Request URI not specified".to_string(),
                 position: None,
+                context: None,
             })?;
             
             SipMessageBuilder {

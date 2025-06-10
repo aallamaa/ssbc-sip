@@ -10,9 +10,10 @@
 macro_rules! validate_required_option_header {
     ($self:expr, $header:expr, $header_name:expr) => {
         if $header.is_none() {
-            return Err(ParseError::InvalidMessage {
+            return Err(SsbcError::ParseError {
                 message: format!("Missing required {} header", $header_name),
-                position: Some($self.start_line),
+                position: None,
+                context: None,
             });
         }
     };
@@ -23,9 +24,10 @@ macro_rules! validate_required_option_header {
 macro_rules! validate_required_vec_header {
     ($self:expr, $headers:expr, $header_name:expr) => {
         if $headers.is_empty() {
-            return Err(ParseError::InvalidMessage {
+            return Err(SsbcError::ParseError {
                 message: format!("Missing required {} header", $header_name),
-                position: Some($self.start_line),
+                position: None,
+                context: None,
             });
         }
     };
@@ -37,9 +39,10 @@ macro_rules! check_duplicate_and_set {
     ($self:expr, $header_field:expr, $value_range:expr, $header_name:expr, $range:expr) => {{
         // Check for duplicate header
         if $header_field.is_some() {
-            return Err(ParseError::InvalidHeader {
+            return Err(SsbcError::ParseError {
                 message: format!("Duplicate {} header", $header_name),
-                position: Some($range),
+                position: None,
+                context: None,
             });
         }
         $header_field = Some(HeaderValue::Raw($value_range));

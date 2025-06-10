@@ -173,77 +173,7 @@ pub enum HeaderValue {
     Via(Via),
 }
 
-/// Parse errors with position information
-#[derive(Debug, Clone, PartialEq)]
-pub enum ParseError {
-    InvalidMessage {
-        message: String,
-        position: Option<TextRange>,
-    },
-    InvalidHeader {
-        message: String,
-        position: Option<TextRange>,
-    },
-    InvalidUri {
-        message: String,
-        position: Option<TextRange>,
-    },
-    MissingRequiredHeader {
-        header_name: String,
-        position: Option<TextRange>,
-    },
-    InvalidParameter {
-        message: String,
-        position: Option<TextRange>,
-    },
-}
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ParseError::InvalidMessage { message, position } => {
-                write!(f, "Invalid message: {}", message)?;
-                if let Some(pos) = position {
-                    write!(f, " at position {}:{}", pos.start, pos.end)?;
-                }
-                Ok(())
-            }
-            ParseError::InvalidHeader { message, position } => {
-                write!(f, "Invalid header: {}", message)?;
-                if let Some(pos) = position {
-                    write!(f, " at position {}:{}", pos.start, pos.end)?;
-                }
-                Ok(())
-            }
-            ParseError::InvalidUri { message, position } => {
-                write!(f, "Invalid URI: {}", message)?;
-                if let Some(pos) = position {
-                    write!(f, " at position {}:{}", pos.start, pos.end)?;
-                }
-                Ok(())
-            }
-            ParseError::MissingRequiredHeader {
-                header_name,
-                position,
-            } => {
-                write!(f, "Missing required header: {}", header_name)?;
-                if let Some(pos) = position {
-                    write!(f, " at position {}:{}", pos.start, pos.end)?;
-                }
-                Ok(())
-            }
-            ParseError::InvalidParameter { message, position } => {
-                write!(f, "Invalid parameter: {}", message)?;
-                if let Some(pos) = position {
-                    write!(f, " at position {}:{}", pos.start, pos.end)?;
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-impl std::error::Error for ParseError {}
+// ParseError removed - now using unified SsbcError from error.rs module
 
 /// Utility methods for TextRange with string operations
 impl TextRange {

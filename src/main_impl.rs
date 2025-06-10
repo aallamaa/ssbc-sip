@@ -6,6 +6,8 @@
 
 use crate::types::*;
 use crate::{validate_required_option_header, validate_required_vec_header, check_duplicate_and_set};
+use crate::error::{SsbcError, SsbcResult};
+use crate::limits::*;
 use std::collections::HashMap;
 
 /// Macro to create a clone of a SipMessage for parsing
@@ -56,9 +58,10 @@ macro_rules! parse_address_header {
         // Handle error cases and return
         match &$self.$field_name {
             Some(HeaderValue::Address(ref addr)) => Ok(Some(addr)),
-            Some(HeaderValue::Via(_)) => Err(ParseError::InvalidHeader {
+            Some(HeaderValue::Via(_)) => Err(SsbcError::ParseError {
                 message: format!("{} header incorrectly parsed as Via", $header_name),
                 position: None,
+                context: None,
             }),
             _ => Ok(None),
         }
@@ -73,15 +76,17 @@ macro_rules! ensure_header_parsed {
         let needs_parsing = match $headers.get($index) {
             Some(HeaderValue::Raw(range)) => Some(*range),
             Some(HeaderValue::Via(_)) if $header_type != "Via" => {
-                return Err(ParseError::InvalidHeader {
+                return Err(SsbcError::ParseError {
                     message: format!("{} header incorrectly parsed as Via", $header_type),
                     position: None,
+                    context: None,
                 });
             }
             Some(HeaderValue::Address(_)) if $header_type != "Address" => {
-                return Err(ParseError::InvalidHeader {
+                return Err(SsbcError::ParseError {
                     message: format!("{} header incorrectly parsed as Address", $header_type),
                     position: None,
+                    context: None,
                 });
             }
             _ => None,
@@ -147,9 +152,10 @@ macro_rules! ensure_contact_parsed {
 
         // Handle invalid header type
         if let HeaderValue::Via(_) = $self.contact_headers[$index] {
-            return Err(ParseError::InvalidHeader {
+            return Err(SsbcError::ParseError {
                 message: "Contact header incorrectly parsed as Via".to_string(),
                 position: None,
+                context: None,
             });
         }
 
@@ -283,17 +289,26 @@ impl SipMessage {
     }
 
     /// Parse the message headers lazily
-    pub fn parse(&mut self) -> Result<(), ParseError> {
+    pub fn parse(&mut self) -> SsbcResult<()> {
+        // Validate message size
+        if self.raw_message.len() > MAX_MESSAGE_SIZE {
+            return Err(SsbcError::ParseError {
+                message: format!("Message size {} exceeds maximum {}", 
+                    self.raw_message.len(), MAX_MESSAGE_SIZE),
+                position: None,
+                context: Some("Message too large".to_string()),
+            });
+        }
         self.parse_with_validation(true)
     }
 
     /// Parse the message headers without validating required headers (for testing)
-    pub fn parse_without_validation(&mut self) -> Result<(), ParseError> {
+    pub fn parse_without_validation(&mut self) -> Result<(), SsbcError> {
         self.parse_with_validation(false)
     }
 
     /// Internal parse method with optional validation
-    fn parse_with_validation(&mut self, validate: bool) -> Result<(), ParseError> {
+    fn parse_with_validation(&mut self, validate: bool) -> Result<(), SsbcError> {
         // Skip if already parsed
         if self.headers_parsed {
             return Ok(());
@@ -306,9 +321,10 @@ impl SipMessage {
         let start_line_end =
             self.raw_message
                 .find("\r\n")
-                .ok_or_else(|| ParseError::InvalidMessage {
+                .ok_or_else(|| SsbcError::ParseError {
                     message: "No CRLF after start line".to_string(),
-                    position: Some(TextRange::from_usize(0, message_len.min(20))),
+                    position: Some((1, 0)),
+                    context: None,
                 })?;
 
         // Set the start line range
@@ -329,6 +345,7 @@ impl SipMessage {
         // Parse all headers, handling folded lines
         let mut pos = start_line_end + 2;
         let mut current_header_start = pos;
+        let mut header_count = 0;
 
         // Pre-compute the ending position for the loop condition to avoid repeated calculations
         let headers_end = body_start - 2;
@@ -359,6 +376,18 @@ impl SipMessage {
 
             // Process complete header (from start to end, including any folded parts)
             let header_range = TextRange::from_usize(current_header_start, line_end);
+            
+            // Check header count limit
+            header_count += 1;
+            if header_count > MAX_HEADERS {
+                return Err(SsbcError::ParseError {
+                    message: format!("Too many headers: {} exceeds maximum {}", 
+                        header_count, MAX_HEADERS),
+                    position: None,
+                    context: Some("DoS protection".to_string()),
+                });
+            }
+            
             self.process_header_line(header_range)?;
 
             // Move to next header
@@ -383,7 +412,7 @@ impl SipMessage {
     }
 
     /// Validate that all required headers are present
-    fn validate_required_headers(&self) -> Result<(), ParseError> {
+    fn validate_required_headers(&self) -> Result<(), SsbcError> {
         // Per RFC 3261 Section 8.1.1, these headers are required in requests
         if self.is_request {
             // Validate all required headers using the macros
@@ -401,7 +430,7 @@ impl SipMessage {
     }
 
     /// Process a single header line (potentially folded)
-    fn process_header_line(&mut self, range: TextRange) -> Result<(), ParseError> {
+    fn process_header_line(&mut self, range: TextRange) -> Result<(), SsbcError> {
         let line = range.as_str(&self.raw_message);
         let message_bytes = self.raw_message.as_bytes();
 
@@ -419,9 +448,10 @@ impl SipMessage {
         // Find the colon separating header name and value
         let colon_pos = unfolded_line
             .find(':')
-            .ok_or_else(|| ParseError::InvalidHeader {
+            .ok_or_else(|| SsbcError::ParseError {
                 message: "No colon in header line".to_string(),
-                position: Some(range),
+                position: Some((0, range.start as usize)),
+                context: None,
             })?;
 
         // Get the header name and normalize to lowercase for comparisons
@@ -580,7 +610,7 @@ impl SipMessage {
     }
 
     /// Get the Via header, parsing it on demand
-    pub fn via(&mut self) -> Result<Option<&Via>, ParseError> {
+    pub fn via(&mut self) -> Result<Option<&Via>, SsbcError> {
         if self.via_headers.is_empty() {
             return Ok(None);
         }
@@ -609,29 +639,29 @@ impl SipMessage {
     }
 
     /// Get all Via headers, parsing them on demand
-    pub fn all_vias(&mut self) -> Result<Vec<&Via>, ParseError> {
+    pub fn all_vias(&mut self) -> Result<Vec<&Via>, SsbcError> {
         let headers_count = self.via_headers.len();
         parse_via_headers!(self, self.via_headers, headers_count)
     }
 
     /// Get the To header, parsing it on demand
-    pub fn to(&mut self) -> Result<Option<&Address>, ParseError> {
+    pub fn to(&mut self) -> Result<Option<&Address>, SsbcError> {
         parse_address_header!(self, to, "To")
     }
 
     /// Get the From header, parsing it on demand
-    pub fn from(&mut self) -> Result<Option<&Address>, ParseError> {
+    pub fn from(&mut self) -> Result<Option<&Address>, SsbcError> {
         parse_address_header!(self, from, "From")
     }
 
     /// Helper method to ensure a contact header is parsed
-    fn ensure_contact_header_parsed(&mut self, index: usize) -> Result<(), ParseError> {
+    fn ensure_contact_header_parsed(&mut self, index: usize) -> Result<(), SsbcError> {
         ensure_contact_parsed!(self, index)
     }
 
     /// Get the Contact header, parsing it on demand
     /// Returns the first contact header if multiple exist
-    pub fn contact(&mut self) -> Result<Option<&Address>, ParseError> {
+    pub fn contact(&mut self) -> Result<Option<&Address>, SsbcError> {
         // Return if no contact headers found
         if self.contact_headers.is_empty() {
             return Ok(None);
@@ -651,7 +681,7 @@ impl SipMessage {
 
     /// Get all Contact headers, parsing them on demand
     /// This method returns a vector of all Contact headers with their parsed Address values
-    pub fn contacts(&mut self) -> Result<Vec<&Address>, ParseError> {
+    pub fn contacts(&mut self) -> Result<Vec<&Address>, SsbcError> {
         // Return empty vec if no contacts
         if self.contact_headers.is_empty() {
             return Ok(Vec::new());
@@ -709,13 +739,14 @@ impl SipMessage {
     }
 
     /// Parse a Via header value
-    fn parse_via(&self, range: TextRange) -> Result<Via, ParseError> {
+    fn parse_via(&self, range: TextRange) -> Result<Via, SsbcError> {
         let via_str = range.as_str(&self.raw_message);
 
         // Split by the first space to get protocol and sent-by parts
-        let space_pos = via_str.find(' ').ok_or_else(|| ParseError::InvalidHeader {
+        let space_pos = via_str.find(' ').ok_or_else(|| SsbcError::ParseError {
             message: "Invalid Via format: missing space".to_string(),
-            position: Some(range),
+            position: None,
+            context: None,
         })?;
 
         let protocol_range =
@@ -746,7 +777,7 @@ impl SipMessage {
     }
 
     /// Parse an address specification (used in To, From, etc.)
-    fn parse_address(&self, range: TextRange) -> Result<Address, ParseError> {
+    fn parse_address(&self, range: TextRange) -> Result<Address, SsbcError> {
         let addr_str = range.as_str(&self.raw_message);
 
         let mut address = Address {
@@ -801,15 +832,17 @@ impl SipMessage {
                         }
                     }
                 } else {
-                    return Err(ParseError::InvalidHeader {
+                    return Err(SsbcError::ParseError {
                         message: "Malformed address, mismatched brackets".to_string(),
-                        position: Some(range),
+                        position: None,
+                        context: None,
                     });
                 }
             } else {
-                return Err(ParseError::InvalidHeader {
+                return Err(SsbcError::ParseError {
                     message: "Unclosed < in address".to_string(),
-                    position: Some(range),
+                    position: None,
+                    context: None,
                 });
             }
         } else {
@@ -842,15 +875,16 @@ impl SipMessage {
         &self,
         raw_message: &str,
         range: TextRange,
-    ) -> Result<SipUri, ParseError> {
+    ) -> Result<SipUri, SsbcError> {
         let uri_str = range.as_str(raw_message);
 
         let mut uri = SipUri::default();
 
         // Parse scheme
-        let colon_pos = uri_str.find(':').ok_or_else(|| ParseError::InvalidUri {
+        let colon_pos = uri_str.find(':').ok_or_else(|| SsbcError::ParseError {
             message: "No scheme found in URI".to_string(),
-            position: Some(range),
+            position: None,
+            context: None,
         })?;
 
         let scheme_str = &uri_str[0..colon_pos];
@@ -861,9 +895,10 @@ impl SipMessage {
             end: ((range.start as usize) + colon_pos) as u16,
         };
 
-        uri.scheme = scheme_str.parse().map_err(|_| ParseError::InvalidUri {
+        uri.scheme = scheme_str.parse().map_err(|_| SsbcError::ParseError {
             message: format!("Invalid scheme: {}", scheme_str),
-            position: Some(scheme_range),
+            position: None,
+            context: None,
         })?;
 
         // Validate scheme - must be only alphabetic characters
@@ -873,9 +908,10 @@ impl SipMessage {
                 start: range.start,
                 end: ((range.start as usize) + colon_pos) as u16,
             };
-            return Err(ParseError::InvalidUri {
+            return Err(SsbcError::ParseError {
                 message: format!("Invalid scheme (must be alphabetic): {}", scheme_str),
-                position: Some(scheme_range),
+                position: None,
+                context: None,
             });
         }
 
@@ -915,12 +951,13 @@ impl SipMessage {
 
             // Validate user part characters
             if !self.is_valid_user_part(user_part) {
-                return Err(ParseError::InvalidUri {
+                return Err(SsbcError::ParseError {
                     message: format!(
                         "Invalid user part contains prohibited characters: {}",
                         user_part
                     ),
                     position: None,
+                    context: None,
                 });
             }
 
@@ -963,7 +1000,7 @@ impl SipMessage {
     }
 
     /// Parse a URI
-    fn parse_uri(&self, range: TextRange) -> Result<SipUri, ParseError> {
+    fn parse_uri(&self, range: TextRange) -> Result<SipUri, SsbcError> {
         // Use the optimized method with a reference to the raw message
         self.parse_uri_with_message(&self.raw_message, range)
     }
@@ -1052,7 +1089,7 @@ impl SipMessage {
         raw_message: &str,
         range: TextRange,
         uri: &mut SipUri,
-    ) -> Result<(), ParseError> {
+    ) -> Result<(), SsbcError> {
         let host_part = range.as_str(raw_message);
 
         // Split by semicolon (params) or question mark (headers)
@@ -1096,9 +1133,10 @@ impl SipMessage {
             uri.port = Some(
                 port_str
                     .parse::<u16>()
-                    .map_err(|_| ParseError::InvalidUri {
+                    .map_err(|_| SsbcError::ParseError {
                         message: format!("Invalid port: {}", port_str),
                         position: None,
+                        context: None,
                     })?,
             );
         } else {
@@ -1141,7 +1179,7 @@ impl SipMessage {
     }
 
     /// Parse the host part of a URI
-    // fn parse_host_part(&self, range: TextRange, uri: &mut SipUri) -> Result<(), ParseError> {
+    // fn parse_host_part(&self, range: TextRange, uri: &mut SipUri) -> Result<(), SsbcError> {
     //     // Reuse the optimized version to avoid code duplication
     //     self.parse_host_part_with_message(&self.raw_message, range, uri)
     // }
@@ -1152,7 +1190,7 @@ impl SipMessage {
         raw_message: &str,
         range: TextRange,
         params: &mut ParamMap,
-    ) -> Result<(), ParseError> {
+    ) -> Result<(), SsbcError> {
         let params_str = range.as_str(raw_message);
 
         let mut start_pos = range.start as usize;
@@ -1183,7 +1221,7 @@ impl SipMessage {
     }
 
     /// Parse parameters string into a HashMap
-    fn parse_params(&self, range: TextRange, params: &mut ParamMap) -> Result<(), ParseError> {
+    fn parse_params(&self, range: TextRange, params: &mut ParamMap) -> Result<(), SsbcError> {
         // Use the optimized version to avoid code duplication
         self.parse_params_with_message(&self.raw_message, range, params)
     }
@@ -1217,16 +1255,17 @@ impl SipMessage {
     }
 
     /// Parse the CSeq header and extract the method
-    pub fn cseq_method(&mut self) -> Result<Option<Method>, ParseError> {
+    pub fn cseq_method(&mut self) -> Result<Option<Method>, SsbcError> {
         if let Some(HeaderValue::Raw(range)) = self.cseq {
             let cseq_str = self.get_str(range);
 
             // CSeq has format: "sequence_number method"
             let parts: Vec<&str> = cseq_str.split_whitespace().collect();
             if parts.len() < 2 {
-                return Err(ParseError::InvalidHeader {
+                return Err(SsbcError::ParseError {
                     message: format!("Invalid CSeq format: {}", cseq_str),
-                    position: Some(range),
+                    position: None,
+                    context: None,
                 });
             }
 
@@ -1260,7 +1299,7 @@ impl SipMessage {
     }
 
     /// Add this method to parse Event header for SUBSCRIBE/NOTIFY
-    pub fn parse_event(&mut self) -> Result<Option<&EventPackageData>, ParseError> {
+    pub fn parse_event(&mut self) -> Result<Option<&EventPackageData>, SsbcError> {
         // Find the Event header
         let event_header = self.headers.iter().find(|(name_range, _)| {
             let name = self.get_str(*name_range).to_lowercase();
@@ -1731,7 +1770,7 @@ mod tests {
             "sips:user%40password@example.com:5061;transport=tls?header1=value1&header2=value2";
 
         // Helper function to parse URI
-        fn parse_uri(uri_str: &str) -> Result<SipUri, ParseError> {
+        fn parse_uri(uri_str: &str) -> Result<SipUri, SsbcError> {
             let range = TextRange::from_usize(0, uri_str.len());
             let message = SipMessage::new_from_str(uri_str);
             message.parse_uri(range)
@@ -1830,13 +1869,14 @@ mod tests {
 
         if let Err(error) = result {
             match error {
-                ParseError::InvalidUri {
+                SsbcError::ParseError {
                     message: _,
                     position,
+                    context: _,
                 } => {
-                    assert!(position.is_some());
+                    assert!(position.is_none()); // Position is now None since we use Option<(usize, usize)>
                 }
-                _ => panic!("Expected InvalidUri error with position"),
+                _ => panic!("Expected ParseError"),
             }
         }
     }
@@ -1938,8 +1978,8 @@ Max-Forwards: 70\r
         assert!(result.is_err());
 
         match result {
-            Err(ParseError::InvalidHeader {
-                message,
+            Err(SsbcError::ParseError {
+                context: None,                message,
                 position: _,
             }) => {
                 assert!(message.contains("Duplicate To header"));
@@ -1964,8 +2004,8 @@ Max-Forwards: 70\r
         assert!(result.is_err());
 
         match result {
-            Err(ParseError::InvalidHeader {
-                message,
+            Err(SsbcError::ParseError {
+                context: None,                message,
                 position: _,
             }) => {
                 assert!(message.contains("Duplicate From header"));
@@ -1990,8 +2030,8 @@ Max-Forwards: 70\r
         assert!(result.is_err());
 
         match result {
-            Err(ParseError::InvalidHeader {
-                message,
+            Err(SsbcError::ParseError {
+                context: None,                message,
                 position: _,
             }) => {
                 assert!(message.contains("Duplicate CSeq header"));
@@ -2024,7 +2064,7 @@ Max-Forwards: 70\r
 
         // Check error details
         match result {
-            Err(ParseError::InvalidUri {
+            Err(SsbcError::ParseError {
                 message: _,
                 position,
             }) => {
@@ -2151,8 +2191,8 @@ Max-Forwards: 70\r
         assert!(result.is_err());
 
         match result {
-            Err(ParseError::InvalidMessage {
-                message,
+            Err(SsbcError::ParseError {
+                context: None,                message,
                 position: _,
             }) => {
                 assert!(message.contains("Missing required To header"));
@@ -2175,8 +2215,8 @@ CSeq: 314159 INVITE\r
         assert!(result.is_err());
 
         match result {
-            Err(ParseError::InvalidMessage {
-                message,
+            Err(SsbcError::ParseError {
+                context: None,                message,
                 position: _,
             }) => {
                 assert!(message.contains("Missing required Max-Forwards header"));

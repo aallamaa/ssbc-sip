@@ -8,3 +8,14 @@ strum = "0.25.0"
 strum_macros = "0.25.0"
 rayon = "1.8.0"
 num_cpus = "1.16.0"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "ssbc_performance"
+harness = false
+
+[[bench]]
+name = "zero_copy_benchmark"
+harness = false
