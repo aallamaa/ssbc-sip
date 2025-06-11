@@ -40,32 +40,29 @@ pub enum Method {
 /// Represents a range of text within a message for zero-copy parsing
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TextRange {
-    pub start: u16,
-    pub end: u16,
+    pub start: usize,
+    pub end: usize,
 }
 
 impl TextRange {
     /// Create a new TextRange
-    pub fn new(start: u16, end: u16) -> Self {
+    pub fn new(start: usize, end: usize) -> Self {
         TextRange { start, end }
     }
 
     /// Create a TextRange from usize values
     pub fn from_usize(start: usize, end: usize) -> Self {
-        TextRange {
-            start: start as u16,
-            end: end as u16,
-        }
+        TextRange { start, end }
     }
 
     /// Get the string slice this range represents
     pub fn as_str<'a>(&self, text: &'a str) -> &'a str {
-        &text[self.start as usize..self.end as usize]
+        &text[self.start..self.end]
     }
 
     /// Get the length of this range
     pub fn len(&self) -> usize {
-        (self.end - self.start) as usize
+        self.end - self.start
     }
 
     /// Check if this range is empty

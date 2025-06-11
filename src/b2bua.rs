@@ -6,7 +6,7 @@
 use crate::error::{SsbcError, SsbcResult};
 use crate::sdp::SessionDescription;
 use std::collections::HashMap;
-use std::time::{SystemTime, Duration, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Call state in B2BUA
 #[derive(Debug, Clone, PartialEq)]
@@ -99,7 +99,7 @@ pub struct B2buaManager {
     transactions: HashMap<String, String>, // Transaction ID -> Call-ID
     max_calls: usize,
     call_timeout_seconds: u64,
-    transaction_timeout_seconds: u64,
+    _transaction_timeout_seconds: u64,
 }
 
 impl B2buaManager {
@@ -111,7 +111,7 @@ impl B2buaManager {
             transactions: HashMap::new(),
             max_calls,
             call_timeout_seconds,
-            transaction_timeout_seconds,
+            _transaction_timeout_seconds: transaction_timeout_seconds,
         }
     }
 
@@ -174,7 +174,7 @@ impl B2buaManager {
         let now = current_timestamp();
 
         // Get incoming call info
-        let incoming_call = self.calls.get(incoming_call_id)
+        let _incoming_call = self.calls.get(incoming_call_id)
             .ok_or_else(|| SsbcError::StateError {
                 operation: "create_outgoing_call".to_string(),
                 reason: "Incoming call not found".to_string(),

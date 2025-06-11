@@ -3,12 +3,12 @@
 //! Provides basic object pooling for SipMessage to reduce allocation overhead.
 //! Focused on core functionality without excessive statistics tracking.
 
-use crate::{SipMessage, error::SsbcResult, error::SsbcError};
+use crate::{SipMessage, error::SsbcResult, error::SsbcError, limits::ParserLimits};
 use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
 
 /// Simple pool configuration
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PoolConfig {
     /// Initial pool size
     pub initial_size: usize,
@@ -16,6 +16,8 @@ pub struct PoolConfig {
     pub max_size: usize,
     /// Whether to pre-allocate initial objects
     pub pre_allocate: bool,
+    /// Parser limits for messages in this pool
+    pub parser_limits: ParserLimits,
 }
 
 impl Default for PoolConfig {
@@ -24,6 +26,7 @@ impl Default for PoolConfig {
             initial_size: 50,
             max_size: 200,
             pre_allocate: true,
+            parser_limits: ParserLimits::default(),
         }
     }
 }
@@ -32,6 +35,7 @@ impl Default for PoolConfig {
 pub struct SipMessagePool {
     pool: Arc<Mutex<VecDeque<SipMessage>>>,
     max_size: usize,
+    parser_limits: ParserLimits,
 }
 
 impl SipMessagePool {
@@ -42,13 +46,14 @@ impl SipMessagePool {
         // Pre-allocate if requested
         if config.pre_allocate {
             for _ in 0..config.initial_size {
-                pool.push_back(SipMessage::new_pooled());
+                pool.push_back(SipMessage::new_pooled_with_limits(config.parser_limits.clone()));
             }
         }
         
         Self {
             pool: Arc::new(Mutex::new(pool)),
             max_size: if config.max_size == 0 { 1000 } else { config.max_size },
+            parser_limits: config.parser_limits,
         }
     }
 
@@ -61,9 +66,9 @@ impl SipMessagePool {
             msg.reset_for_reuse();
             PooledSipMessage::new(msg, self.pool.clone(), self.max_size)
         } else {
-            // Create new message
+            // Create new message with the pool's parser limits
             PooledSipMessage::new(
-                SipMessage::new_pooled(),
+                SipMessage::new_pooled_with_limits(self.parser_limits.clone()),
                 self.pool.clone(),
                 self.max_size
             )
@@ -156,6 +161,7 @@ pub fn get_pooled_message() -> PooledSipMessage {
     });
     
     unsafe {
+        #[allow(static_mut_refs)]
         GLOBAL_POOL.as_ref().unwrap().get()
     }
 }
@@ -167,15 +173,23 @@ impl SipMessage {
         Self::new(String::new())
     }
 
+    /// Create a new SIP message optimized for pooling with custom limits
+    pub fn new_pooled_with_limits(limits: ParserLimits) -> Self {
+        Self::with_limits(String::new(), limits)
+    }
+
     /// Reset message for reuse in pool
     pub fn reset_for_reuse(&mut self) {
-        // Reset internal state
-        *self = Self::new(String::new());
+        // Keep the current limits when resetting
+        let limits = self.limits().clone();
+        *self = Self::with_limits(String::new(), limits);
     }
 
     /// Set raw message data (for pooled reuse)
     pub fn set_raw_message(&mut self, data: &str) {
-        *self = Self::new_from_str(data);
+        // Keep the current limits when setting new data
+        let limits = self.limits().clone();
+        *self = Self::with_limits(data.to_string(), limits);
     }
 }
 
@@ -189,6 +203,7 @@ mod tests {
             initial_size: 5,
             max_size: 10,
             pre_allocate: true,
+            parser_limits: crate::limits::ParserLimits::default(),
         };
         
         let pool = SipMessagePool::new(config);
@@ -209,6 +224,7 @@ mod tests {
             initial_size: 1,
             max_size: 2,
             pre_allocate: true,
+            parser_limits: crate::limits::ParserLimits::default(),
         };
         
         let pool = SipMessagePool::new(config);

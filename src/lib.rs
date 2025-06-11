@@ -28,6 +28,8 @@ pub use sdp::*;
 pub use error::*;
 pub use b2bua::*;
 pub use pool::*;
+pub use limits::*;
+pub use validation::*;
 
 // Legacy compatibility - continue to export from main_impl for any remaining functionality
 pub use main_impl::*;

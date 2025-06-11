@@ -23,6 +23,7 @@ fn main() {
         initial_size: 10,
         max_size: 50,
         pre_allocate: true,
+        parser_limits: ssbc::limits::ParserLimits::default(),
     };
     
     let pool = SipMessagePool::new(config);

@@ -8,7 +8,7 @@ fn main() {
         initial_size: 10,
         max_size: 50,
         pre_allocate: true,
-        idle_timeout: 60,
+        parser_limits: ssbc::limits::ParserLimits::default(),
     };
     
     let pool = SipMessagePool::new(config);
@@ -46,14 +46,9 @@ Content-Length: 0
     // Drop pooled message (returns to pool)
     drop(pooled_msg);
     
-    // Pool statistics
-    let stats = pool.stats();
-    println!("\n📊 Pool Statistics:");
-    println!("   Total created: {}", stats.total_created);
-    println!("   Current size: {}", stats.current_size);
-    println!("   Total requests: {}", stats.total_requests);
-    println!("   Cache hits: {}", stats.cache_hits);
-    println!("   Hit rate: {:.2}%", stats.hit_rate * 100.0);
+    // Pool size
+    println!("\n📊 Pool Information:");
+    println!("   Current pool size: {}", pool.size());
     
     // Demonstrate high-throughput scenario
     println!("\n⚡ High-throughput test (1000 messages):");
@@ -75,12 +70,9 @@ Content-Length: 0
     println!("   Processed 1000 messages in {:?}", duration);
     println!("   Rate: {:.0} messages/second", msg_per_sec);
     
-    // Final pool statistics
-    let final_stats = pool.stats();
-    println!("\n📊 Final Pool Statistics:");
-    println!("   Total requests: {}", final_stats.total_requests);
-    println!("   Cache hits: {}", final_stats.cache_hits);
-    println!("   Hit rate: {:.2}%", final_stats.hit_rate * 100.0);
+    // Final pool size
+    println!("\n📊 Final Pool Information:");
+    println!("   Pool size after test: {}", pool.size());
     
     // Test global pool
     println!("\n🌍 Testing global pool:");
@@ -92,17 +84,10 @@ Content-Length: 0
         Err(e) => println!("❌ Global pool error: {}", e),
     }
     
-    if let Some(global_stats) = global_pool_stats() {
-        println!("   Global pool requests: {}", global_stats.total_requests);
-    }
+    println!("   Global pool initialized successfully");
     
-    // Test string pool
-    println!("\n📝 Testing string pool:");
-    let string_pool = StringPool::new(512, 20);
-    
-    let mut buffer = string_pool.get_buffer();
-    buffer.as_mut().push_str("SIP header processing with pooled buffer");
-    println!("   Buffer content: {}", buffer.as_str());
+    // String pooling is not implemented in this version
+    println!("\n📝 String pooling not implemented in simplified version");
     
     println!("\n🎉 Pool demo completed successfully!");
 }
