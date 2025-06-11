@@ -13,6 +13,7 @@ pub mod zero_copy;
 pub mod sdp;
 pub mod error;
 pub mod b2bua;
+pub mod b2bua_enhanced;
 pub mod pool;
 pub mod limits;
 pub mod validation;
