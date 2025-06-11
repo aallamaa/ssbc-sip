@@ -268,6 +268,16 @@ impl SipMessage {
     pub fn new(message: String) -> Self {
         Self::with_limits(message, ParserLimits::default())
     }
+    
+    /// Parse a SIP message from bytes (static method for backward compatibility)
+    pub fn parse(data: &[u8]) -> Result<Self, SsbcError> {
+        let message_str = std::str::from_utf8(data)
+            .map_err(|e| SsbcError::parse_error(&format!("Invalid UTF-8: {}", e), None, None))?;
+        
+        let mut msg = Self::new_from_str(message_str);
+        msg.parse_headers()?;
+        Ok(msg)
+    }
 
     /// Create a new SIP message with custom parser limits
     pub fn with_limits(message: String, limits: ParserLimits) -> Self {
@@ -314,7 +324,7 @@ impl SipMessage {
     }
 
     /// Parse the message headers lazily
-    pub fn parse(&mut self) -> SsbcResult<()> {
+    pub fn parse_headers(&mut self) -> SsbcResult<()> {
         // Validate message size
         if self.raw_message.len() > self.limits().max_message_size {
             return Err(SsbcError::ParseError {
@@ -1371,6 +1381,194 @@ impl SipMessage {
         }
     }
 
+    /// Extract From URI without allocating
+    pub fn from_uri(&self) -> Result<SipUri, SsbcError> {
+        let from_range = match self.from.as_ref() {
+            Some(HeaderValue::Raw(range)) => *range,
+            _ => return Err(SsbcError::parse_error("No From header", None, None)),
+        };
+        
+        let from_str = self.get_str(from_range);
+        
+        // Extract URI from format: "Display Name" <sip:user@host>;tag=value
+        let uri_start = from_str.find('<');
+        let uri_end = from_str.find('>');
+        
+        if let (Some(start), Some(end)) = (uri_start, uri_end) {
+            if start < end {
+                // Calculate the range for the URI inside angle brackets
+                let uri_range = TextRange::from_usize(
+                    from_range.start as usize + start + 1,
+                    from_range.start as usize + end
+                );
+                return self.parse_uri(uri_range);
+            }
+        }
+        
+        // No angle brackets, try to parse the whole thing up to semicolon
+        let uri_end = from_str.find(';').unwrap_or(from_str.len());
+        let trimmed_start = from_str[..uri_end].trim_start().as_ptr() as usize - from_str.as_ptr() as usize;
+        let trimmed_end = from_str[..uri_end].trim_end().len() + trimmed_start;
+        
+        let uri_range = TextRange::from_usize(
+            from_range.start as usize + trimmed_start,
+            from_range.start as usize + trimmed_end
+        );
+        self.parse_uri(uri_range)
+    }
+
+    /// Extract To URI without allocating
+    pub fn to_uri(&self) -> Result<SipUri, SsbcError> {
+        let to_range = match self.to.as_ref() {
+            Some(HeaderValue::Raw(range)) => *range,
+            _ => return Err(SsbcError::parse_error("No To header", None, None)),
+        };
+        
+        let to_str = self.get_str(to_range);
+        
+        // Extract URI from format: "Display Name" <sip:user@host>;tag=value
+        let uri_start = to_str.find('<');
+        let uri_end = to_str.find('>');
+        
+        if let (Some(start), Some(end)) = (uri_start, uri_end) {
+            if start < end {
+                // Calculate the range for the URI inside angle brackets
+                let uri_range = TextRange::from_usize(
+                    to_range.start as usize + start + 1,
+                    to_range.start as usize + end
+                );
+                return self.parse_uri(uri_range);
+            }
+        }
+        
+        // No angle brackets, try to parse the whole thing up to semicolon
+        let uri_end = to_str.find(';').unwrap_or(to_str.len());
+        let trimmed_start = to_str[..uri_end].trim_start().as_ptr() as usize - to_str.as_ptr() as usize;
+        let trimmed_end = to_str[..uri_end].trim_end().len() + trimmed_start;
+        
+        let uri_range = TextRange::from_usize(
+            to_range.start as usize + trimmed_start,
+            to_range.start as usize + trimmed_end
+        );
+        self.parse_uri(uri_range)
+    }
+
+    /// Extract Contact URI without allocating
+    pub fn contact_uri(&self) -> Result<SipUri, SsbcError> {
+        let contacts = self.get_headers_by_name("Contact");
+        let contact = contacts.first()
+            .ok_or_else(|| SsbcError::parse_error("No Contact header", None, None))?;
+        
+        let contact_range = match contact {
+            HeaderValue::Raw(range) => *range,
+            _ => return Err(SsbcError::parse_error("Contact header not in expected format", None, None)),
+        };
+        
+        let contact_str = self.get_str(contact_range);
+        // Extract URI from format: "Display Name" <sip:user@host>;parameters
+        let uri_start = contact_str.find('<');
+        let uri_end = contact_str.find('>');
+        
+        if let (Some(start), Some(end)) = (uri_start, uri_end) {
+            if start < end {
+                // Calculate the range for the URI inside angle brackets
+                let uri_range = TextRange::from_usize(
+                    contact_range.start as usize + start + 1,
+                    contact_range.start as usize + end
+                );
+                return self.parse_uri(uri_range);
+            }
+        }
+        
+        // No angle brackets, try to parse the whole thing
+        let trimmed_start = contact_str.trim_start().as_ptr() as usize - contact_str.as_ptr() as usize;
+        let trimmed_end = contact_str.trim_end().len() + trimmed_start;
+        
+        let uri_range = TextRange::from_usize(
+            contact_range.start as usize + trimmed_start,
+            contact_range.start as usize + trimmed_end
+        );
+        self.parse_uri(uri_range)
+    }
+
+    /// Extract request URI (only valid for requests)
+    pub fn request_uri(&self) -> Result<SipUri, SsbcError> {
+        if !self.is_request {
+            return Err(SsbcError::parse_error("Not a request", None, None));
+        }
+        
+        let start_line = self.get_str(self.start_line);
+        let parts: Vec<&str> = start_line.split_whitespace().collect();
+        if parts.len() < 2 {
+            return Err(SsbcError::parse_error("Invalid request line", None, None));
+        }
+        
+        // The URI is the second part of the request line
+        let uri_str = parts[1];
+        let uri_start = start_line.find(uri_str).unwrap_or(0);
+        let uri_range = TextRange::from_usize(
+            self.start_line.start as usize + uri_start,
+            self.start_line.start as usize + uri_start + uri_str.len()
+        );
+        
+        self.parse_uri(uri_range)
+    }
+
+    /// Extract From tag parameter efficiently
+    pub fn from_tag(&self) -> Option<&str> {
+        let from_range = match self.from.as_ref()? {
+            HeaderValue::Raw(range) => range,
+            _ => return None,
+        };
+        let from_str = self.get_str(*from_range);
+        
+        // Find tag parameter after semicolon
+        if let Some(tag_pos) = from_str.find("tag=") {
+            let tag_start = tag_pos + 4;
+            // Find end of tag value (semicolon or end of string)
+            let tag_end = from_str[tag_start..]
+                .find(';')
+                .map(|i| tag_start + i)
+                .unwrap_or(from_str.len());
+            
+            Some(&from_str[tag_start..tag_end])
+        } else {
+            None
+        }
+    }
+
+    /// Extract To tag parameter efficiently
+    pub fn to_tag(&self) -> Option<&str> {
+        let to_range = match self.to.as_ref()? {
+            HeaderValue::Raw(range) => range,
+            _ => return None,
+        };
+        let to_str = self.get_str(*to_range);
+        
+        // Find tag parameter after semicolon
+        if let Some(tag_pos) = to_str.find("tag=") {
+            let tag_start = tag_pos + 4;
+            // Find end of tag value (semicolon or end of string)
+            let tag_end = to_str[tag_start..]
+                .find(';')
+                .map(|i| tag_start + i)
+                .unwrap_or(to_str.len());
+            
+            Some(&to_str[tag_start..tag_end])
+        } else {
+            None
+        }
+    }
+
+    /// Get Call-ID as string
+    pub fn call_id_str(&self) -> Option<&str> {
+        match self.call_id.as_ref()? {
+            HeaderValue::Raw(range) => Some(self.get_str(*range)),
+            _ => None,
+        }
+    }
+
+
     /// Add this method to parse Event header for SUBSCRIBE/NOTIFY
     pub fn parse_event(&mut self) -> Result<Option<&EventPackageData>, SsbcError> {
         // Find the Event header
@@ -1586,7 +1784,7 @@ mod tests {
         let message = format!("INVITE sip:bob@example.com SIP/2.0\r\nFrom: {}\r\nTo: <sip:bob@example.com>\r\nCall-ID: 12345\r\nCSeq: 1 INVITE\r\nVia: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r\nMax-Forwards: 70\r\n\r\n", address_str);
 
         let mut sip_message = SipMessage::new_from_str(&message);
-        assert!(sip_message.parse().is_ok());
+        assert!(sip_message.parse_headers().is_ok());
 
         // Get the From header and copy the ranges we need to test
         let full_range;
@@ -1651,7 +1849,7 @@ mod tests {
         let message = format!("INVITE sip:bob@example.com SIP/2.0\r\nVia: {}\r\nFrom: Alice <sip:alice@atlanta.com>;tag=1928301774\r\nTo: <sip:bob@example.com>\r\nCall-ID: 12345\r\nCSeq: 1 INVITE\r\nMax-Forwards: 70\r\n\r\n", via_str);
 
         let mut sip_message = SipMessage::new_from_str(&message);
-        assert!(sip_message.parse().is_ok());
+        assert!(sip_message.parse_headers().is_ok());
 
         // Get the Via header data we need for testing
         let full_range;
@@ -1746,7 +1944,7 @@ mod tests {
                        \r\n";
 
         let mut sip_message = SipMessage::new_from_str(message);
-        assert!(sip_message.parse().is_ok());
+        assert!(sip_message.parse_headers().is_ok());
         assert!(sip_message.is_request());
         assert_eq!(
             sip_message.start_line(),
@@ -1795,7 +1993,7 @@ mod tests {
                        \r\n";
 
         let mut sip_message = SipMessage::new_from_str(message);
-        assert!(sip_message.parse().is_ok());
+        assert!(sip_message.parse_headers().is_ok());
         assert!(!sip_message.is_request());
         assert_eq!(sip_message.start_line(), "SIP/2.0 200 OK");
     }
@@ -2047,7 +2245,7 @@ Max-Forwards: 70\r
 \r
 ";
         let mut sip_message = SipMessage::new_from_str(message_with_duplicate_to);
-        let result = sip_message.parse();
+        let result = sip_message.parse_headers();
         assert!(result.is_err());
 
         match result {
@@ -2073,7 +2271,7 @@ Max-Forwards: 70\r
 \r
 ";
         let mut sip_message = SipMessage::new_from_str(message_with_duplicate_from);
-        let result = sip_message.parse();
+        let result = sip_message.parse_headers();
         assert!(result.is_err());
 
         match result {
@@ -2099,7 +2297,7 @@ Max-Forwards: 70\r
 \r
 ";
         let mut sip_message = SipMessage::new_from_str(message_with_duplicate_cseq);
-        let result = sip_message.parse();
+        let result = sip_message.parse_headers();
         assert!(result.is_err());
 
         match result {
@@ -2264,7 +2462,7 @@ Max-Forwards: 70\r
 \r
 ";
         let mut sip_message = SipMessage::new_from_str(message_missing_to);
-        let result = sip_message.parse();
+        let result = sip_message.parse_headers();
         assert!(result.is_err());
 
         match result {
@@ -2288,7 +2486,7 @@ CSeq: 314159 INVITE\r
 \r
 ";
         let mut sip_message = SipMessage::new_from_str(message_missing_max_forwards);
-        let result = sip_message.parse();
+        let result = sip_message.parse_headers();
         assert!(result.is_err());
 
         match result {
@@ -2778,5 +2976,241 @@ CSeq: 314159 INVITE\r
                 // No assert needed here as this is just a placeholder for future implementation
             }
         }
+    }
+
+    #[test]
+    fn test_from_uri_extraction() {
+        let message = "\
+INVITE sip:bob@biloxi.com SIP/2.0\r
+Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r
+To: Bob <sip:bob@biloxi.com>\r
+From: Alice <sip:alice@atlanta.com:5060>;tag=1928301774\r
+Call-ID: a84b4c76e66710@pc33.atlanta.com\r
+CSeq: 314159 INVITE\r
+Max-Forwards: 70\r
+\r
+";
+        let mut sip_message = SipMessage::new_from_str(message);
+        assert!(sip_message.parse_headers().is_ok());
+
+        let from_uri = sip_message.from_uri().unwrap();
+        assert_eq!(from_uri.scheme, Scheme::SIP);
+        assert_eq!(sip_message.get_opt_str(from_uri.user_info), Some("alice"));
+        assert_eq!(sip_message.get_opt_str(from_uri.host), Some("atlanta.com"));
+        assert_eq!(from_uri.port, Some(5060));
+    }
+
+    #[test]
+    fn test_to_uri_extraction() {
+        let message = "\
+INVITE sip:bob@biloxi.com SIP/2.0\r
+Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r
+To: Bob <sip:bob@biloxi.com:5080;transport=tcp>\r
+From: Alice <sip:alice@atlanta.com>;tag=1928301774\r
+Call-ID: a84b4c76e66710@pc33.atlanta.com\r
+CSeq: 314159 INVITE\r
+Max-Forwards: 70\r
+\r
+";
+        let mut sip_message = SipMessage::new_from_str(message);
+        assert!(sip_message.parse_headers().is_ok());
+
+        let to_uri = sip_message.to_uri().unwrap();
+        assert_eq!(to_uri.scheme, Scheme::SIP);
+        assert_eq!(sip_message.get_opt_str(to_uri.user_info), Some("bob"));
+        assert_eq!(sip_message.get_opt_str(to_uri.host), Some("biloxi.com"));
+        assert_eq!(to_uri.port, Some(5080));
+        
+        // Check URI parameter
+        let params_map = sip_message.get_params_map(&to_uri.params);
+        assert_eq!(params_map.get("transport").unwrap(), &Some("tcp"));
+    }
+
+    #[test]
+    fn test_contact_uri_extraction() {
+        let message = "\
+INVITE sip:bob@biloxi.com SIP/2.0\r
+Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r
+To: Bob <sip:bob@biloxi.com>\r
+From: Alice <sip:alice@atlanta.com>;tag=1928301774\r
+Call-ID: a84b4c76e66710@pc33.atlanta.com\r
+CSeq: 314159 INVITE\r
+Max-Forwards: 70\r
+Contact: <sip:alice@192.168.1.100:5060;transport=udp>\r
+\r
+";
+        let mut sip_message = SipMessage::new_from_str(message);
+        assert!(sip_message.parse_headers().is_ok());
+
+        let contact_uri = sip_message.contact_uri().unwrap();
+        assert_eq!(contact_uri.scheme, Scheme::SIP);
+        assert_eq!(sip_message.get_opt_str(contact_uri.user_info), Some("alice"));
+        assert_eq!(sip_message.get_opt_str(contact_uri.host), Some("192.168.1.100"));
+        assert_eq!(contact_uri.port, Some(5060));
+    }
+
+    #[test]
+    fn test_request_uri_extraction() {
+        let message = "\
+INVITE sip:bob@biloxi.com:5060;transport=tcp SIP/2.0\r
+Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r
+To: Bob <sip:bob@biloxi.com>\r
+From: Alice <sip:alice@atlanta.com>;tag=1928301774\r
+Call-ID: a84b4c76e66710@pc33.atlanta.com\r
+CSeq: 314159 INVITE\r
+Max-Forwards: 70\r
+\r
+";
+        let mut sip_message = SipMessage::new_from_str(message);
+        assert!(sip_message.parse_headers().is_ok());
+
+        let request_uri = sip_message.request_uri().unwrap();
+        assert_eq!(request_uri.scheme, Scheme::SIP);
+        assert_eq!(sip_message.get_opt_str(request_uri.user_info), Some("bob"));
+        assert_eq!(sip_message.get_opt_str(request_uri.host), Some("biloxi.com"));
+        assert_eq!(request_uri.port, Some(5060));
+    }
+
+    #[test]
+    fn test_from_tag_extraction() {
+        let message = "\
+INVITE sip:bob@biloxi.com SIP/2.0\r
+Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r
+To: Bob <sip:bob@biloxi.com>\r
+From: Alice <sip:alice@atlanta.com>;tag=1928301774\r
+Call-ID: a84b4c76e66710@pc33.atlanta.com\r
+CSeq: 314159 INVITE\r
+Max-Forwards: 70\r
+\r
+";
+        let mut sip_message = SipMessage::new_from_str(message);
+        assert!(sip_message.parse_headers().is_ok());
+
+        let from_tag = sip_message.from_tag();
+        assert_eq!(from_tag, Some("1928301774"));
+    }
+
+    #[test]
+    fn test_to_tag_extraction() {
+        let message = "\
+SIP/2.0 200 OK\r
+Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r
+To: Bob <sip:bob@biloxi.com>;tag=a6c85cf\r
+From: Alice <sip:alice@atlanta.com>;tag=1928301774\r
+Call-ID: a84b4c76e66710@pc33.atlanta.com\r
+CSeq: 314159 INVITE\r
+\r
+";
+        let mut sip_message = SipMessage::new_from_str(message);
+        assert!(sip_message.parse_headers().is_ok());
+
+        let to_tag = sip_message.to_tag();
+        assert_eq!(to_tag, Some("a6c85cf"));
+    }
+
+    #[test]
+    fn test_call_id_str() {
+        let message = "\
+INVITE sip:bob@biloxi.com SIP/2.0\r
+Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r
+To: Bob <sip:bob@biloxi.com>\r
+From: Alice <sip:alice@atlanta.com>;tag=1928301774\r
+Call-ID: a84b4c76e66710@pc33.atlanta.com\r
+CSeq: 314159 INVITE\r
+Max-Forwards: 70\r
+\r
+";
+        let mut sip_message = SipMessage::new_from_str(message);
+        assert!(sip_message.parse_headers().is_ok());
+
+        let call_id = sip_message.call_id_str();
+        assert_eq!(call_id, Some("a84b4c76e66710@pc33.atlanta.com"));
+    }
+
+    #[test]
+    fn test_missing_from_uri_error() {
+        let message = "\
+INVITE sip:bob@biloxi.com SIP/2.0\r
+Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r
+To: Bob <sip:bob@biloxi.com>\r
+Call-ID: a84b4c76e66710@pc33.atlanta.com\r
+CSeq: 314159 INVITE\r
+Max-Forwards: 70\r
+\r
+";
+        let mut sip_message = SipMessage::new_from_str(message);
+        assert!(sip_message.parse_without_validation().is_ok());
+
+        let result = sip_message.from_uri();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_request_uri_on_response_error() {
+        let message = "\
+SIP/2.0 200 OK\r
+Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r
+To: Bob <sip:bob@biloxi.com>;tag=a6c85cf\r
+From: Alice <sip:alice@atlanta.com>;tag=1928301774\r
+Call-ID: a84b4c76e66710@pc33.atlanta.com\r
+CSeq: 314159 INVITE\r
+\r
+";
+        let mut sip_message = SipMessage::new_from_str(message);
+        assert!(sip_message.parse_headers().is_ok());
+
+        let result = sip_message.request_uri();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_uri_without_angle_brackets() {
+        let message = "\
+REGISTER sip:registrar.atlanta.com SIP/2.0\r
+Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r
+To: sip:alice@atlanta.com\r
+From: sip:alice@atlanta.com;tag=1928301774\r
+Call-ID: a84b4c76e66710@pc33.atlanta.com\r
+CSeq: 1 REGISTER\r
+Max-Forwards: 70\r
+\r
+";
+        let mut sip_message = SipMessage::new_from_str(message);
+        assert!(sip_message.parse_headers().is_ok());
+
+        // Test From URI without angle brackets
+        let from_uri = sip_message.from_uri().unwrap();
+        assert_eq!(from_uri.scheme, Scheme::SIP);
+        assert_eq!(sip_message.get_opt_str(from_uri.user_info), Some("alice"));
+        assert_eq!(sip_message.get_opt_str(from_uri.host), Some("atlanta.com"));
+
+        // Test To URI without angle brackets
+        let to_uri = sip_message.to_uri().unwrap();
+        assert_eq!(to_uri.scheme, Scheme::SIP);
+        assert_eq!(sip_message.get_opt_str(to_uri.user_info), Some("alice"));
+        assert_eq!(sip_message.get_opt_str(to_uri.host), Some("atlanta.com"));
+    }
+
+    #[test]
+    fn test_tag_extraction_with_multiple_params() {
+        let message = "\
+INVITE sip:bob@biloxi.com SIP/2.0\r
+Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r
+To: Bob <sip:bob@biloxi.com>;tag=a6c85cf;foo=bar\r
+From: Alice <sip:alice@atlanta.com>;foo=baz;tag=1928301774;bar=qux\r
+Call-ID: a84b4c76e66710@pc33.atlanta.com\r
+CSeq: 314159 INVITE\r
+Max-Forwards: 70\r
+\r
+";
+        let mut sip_message = SipMessage::new_from_str(message);
+        assert!(sip_message.parse_headers().is_ok());
+
+        // Tags should be extracted correctly even with other parameters
+        let from_tag = sip_message.from_tag();
+        assert_eq!(from_tag, Some("1928301774"));
+
+        let to_tag = sip_message.to_tag();
+        assert_eq!(to_tag, Some("a6c85cf"));
     }
 }

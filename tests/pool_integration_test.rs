@@ -318,7 +318,7 @@ Content-Length: 0
         let msg_data = test_msg.replace("options-test", &call_id);
         
         let mut msg = SipMessage::new_from_str(&msg_data);
-        msg.parse().unwrap();
+        msg.parse_headers().unwrap();
         assert_eq!(msg.call_id().unwrap(), call_id);
     }
     let regular_duration = start.elapsed();

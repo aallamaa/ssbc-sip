@@ -112,7 +112,7 @@ impl PooledSipMessage {
     pub fn parse_from_str(&mut self, data: &str) -> SsbcResult<()> {
         if let Some(ref mut msg) = self.message {
             msg.set_raw_message(data);
-            msg.parse().map_err(|e| SsbcError::parse_error(e.to_string(), None, None))
+            msg.parse_headers().map_err(|e| SsbcError::parse_error(e.to_string(), None, None))
         } else {
             unreachable!("PooledSipMessage should always contain a message")
         }

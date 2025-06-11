@@ -44,7 +44,7 @@ a=rtpmap:116 telephone-event/8000
 "#;
 
     let mut message = SipMessage::new_from_str(&to_sip_message(invite_msg));
-    let result = message.parse();
+    let result = message.parse_headers();
     assert!(result.is_ok(), "Failed to parse real INVITE message: {:?}", result);
 
     // Verify basic request parsing
@@ -98,7 +98,7 @@ Content-Length: 0
 "#;
 
     let mut message = SipMessage::new_from_str(&to_sip_message(redirect_msg));
-    let result = message.parse();
+    let result = message.parse_headers();
     assert!(result.is_ok(), "Failed to parse 302 redirect response: {:?}", result);
 
     // Verify it's a response
@@ -139,7 +139,7 @@ Content-Length: 0
 "#;
 
     let mut message = SipMessage::new_from_str(&to_sip_message(not_acceptable_msg));
-    let result = message.parse();
+    let result = message.parse_headers();
     assert!(result.is_ok(), "Failed to parse 488 response: {:?}", result);
 
     // Verify it's a response
@@ -183,7 +183,7 @@ Content-Length: 0
 "#;
 
     let mut message = SipMessage::new_from_str(&to_sip_message(trying_msg));
-    let result = message.parse();
+    let result = message.parse_headers();
     assert!(result.is_ok(), "Failed to parse 100 Trying response: {:?}", result);
 
     // Verify it's a response
@@ -221,7 +221,7 @@ Content-Length: 0
 "#;
 
     let mut message = SipMessage::new_from_str(&to_sip_message(prack_msg));
-    let result = message.parse();
+    let result = message.parse_headers();
     assert!(result.is_ok(), "Failed to parse PRACK request: {:?}", result);
 
     // Verify it's a request
@@ -263,7 +263,7 @@ Content-Length: 0
 "#;
 
     let mut message = SipMessage::new_from_str(&to_sip_message(complex_contact_msg));
-    let result = message.parse();
+    let result = message.parse_headers();
     assert!(result.is_ok(), "Failed to parse message with complex Contact: {:?}", result);
 
     let contact_headers = message.contacts();
@@ -293,7 +293,7 @@ Content-Length: 0
 "#;
 
     let mut message = SipMessage::new_from_str(&to_sip_message(tel_uri_msg));
-    let result = message.parse();
+    let result = message.parse_headers();
     assert!(result.is_ok(), "Failed to parse message with tel: URI: {:?}", result);
 
     // Test P-Asserted-Identity header parsing
@@ -319,7 +319,7 @@ Content-Length: 0
 "#;
 
     let mut message = SipMessage::new_from_str(&to_sip_message(session_timer_msg));
-    let result = message.parse();
+    let result = message.parse_headers();
     assert!(result.is_ok(), "Failed to parse message with session timer headers: {:?}", result);
 
     // Test Session-Expires header
@@ -374,15 +374,15 @@ Content-Length: 0
 
     // Parse all three messages
     let mut invite_msg = SipMessage::new_from_str(&to_sip_message(invite));
-    assert!(invite_msg.parse().is_ok());
+    assert!(invite_msg.parse_headers().is_ok());
     assert!(invite_msg.is_request());
     
     let mut redirect_msg = SipMessage::new_from_str(&to_sip_message(redirect));
-    assert!(redirect_msg.parse().is_ok());
+    assert!(redirect_msg.parse_headers().is_ok());
     assert!(!redirect_msg.is_request());
     
     let mut ack_msg = SipMessage::new_from_str(&to_sip_message(ack));
-    assert!(ack_msg.parse().is_ok());
+    assert!(ack_msg.parse_headers().is_ok());
     assert!(ack_msg.is_request());
     
     // Verify Call-ID consistency across all messages
@@ -471,7 +471,7 @@ Content-Length: 0
         println!("Testing: {}", description);
         
         let mut sip_msg = SipMessage::new_from_str(&to_sip_message(message));
-        let parse_result = sip_msg.parse();
+        let parse_result = sip_msg.parse_headers();
         
         assert!(parse_result.is_ok(), 
                 "Failed to parse {} message: {:?}", description, parse_result);

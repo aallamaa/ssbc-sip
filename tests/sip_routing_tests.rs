@@ -213,7 +213,7 @@ Content-Length: 0
 "#;
 
     let mut message = SipMessage::new_from_str(&to_sip_message(invite_msg));
-    assert!(message.parse().is_ok());
+    assert!(message.parse_headers().is_ok());
     
     // Extract calling number from From header
     let _from_header = message.from().unwrap().unwrap();
@@ -269,7 +269,7 @@ Content-Length: 0
 "#;
 
     let mut message = SipMessage::new_from_str(&to_sip_message(redirect_msg));
-    assert!(message.parse().is_ok());
+    assert!(message.parse_headers().is_ok());
     
     // Parse multiple Contact headers for route selection
     let contact_line = message.raw_message().lines()

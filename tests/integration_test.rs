@@ -38,7 +38,7 @@ a=rtpmap:116 telephone-event/8000
 
     // Step 1: Parse the incoming INVITE using SSBC
     let mut sip_msg = SipMessage::new_from_str(&invite_msg);
-    assert!(sip_msg.parse().is_ok());
+    assert!(sip_msg.parse_headers().is_ok());
 
     // Step 2: Extract call information for routing
     let call_id = sip_msg.call_id().unwrap();
@@ -198,7 +198,7 @@ fn test_error_handling_integration() {
     let malformed_msg = "INVALID SIP MESSAGE\r\n";
     
     let mut sip_msg = SipMessage::new_from_str(malformed_msg);
-    let result = sip_msg.parse();
+    let result = sip_msg.parse_headers();
     
     assert!(result.is_err());
     
@@ -289,7 +289,7 @@ Content-Length: 0
     for i in 0..1000 {
         let msg = invite_msg.replace("perf-test-call", &format!("call-{}", i));
         let mut sip_msg = SipMessage::new_from_str(&msg);
-        assert!(sip_msg.parse().is_ok());
+        assert!(sip_msg.parse_headers().is_ok());
         
         // Extract key information
         let _call_id = sip_msg.call_id().unwrap();

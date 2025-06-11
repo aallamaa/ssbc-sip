@@ -44,7 +44,7 @@ Content-Length: 0\r\n\r\n";
     // Run the first iteration separately to check the results
     {
         let mut message = SipMessage::new_from_str(simple_message);
-        let _ = message.parse();
+        let _ = message.parse_headers();
         let to_result = message.to();
         println!("To header after explicit call: {:?}", to_result);
     }
@@ -54,7 +54,7 @@ Content-Length: 0\r\n\r\n";
 
     for _ in 0..ITERATIONS {
         let mut message = SipMessage::new_from_str(simple_message);
-        if message.parse().is_ok() && message.to().is_ok() {
+        if message.parse_headers().is_ok() && message.to().is_ok() {
             successful_parses.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -153,14 +153,14 @@ fn benchmark_manual_threads(benchmark_type: BenchmarkType) {
                     BenchmarkType::ParsingOnly => {
                         // Just parse the message
                         let mut sip_message = SipMessage::new_from_str(&message_clone);
-                        if sip_message.parse().is_ok() {
+                        if sip_message.parse_headers().is_ok() {
                             counter_clone.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                     BenchmarkType::HeaderAccess => {
                         // Parse and access headers
                         let mut sip_message = SipMessage::new_from_str(&message_clone);
-                        if sip_message.parse().is_ok() {
+                        if sip_message.parse_headers().is_ok() {
                             let _ = sip_message.to();
                             let _ = sip_message.from();
                             let _ = sip_message.contact();
@@ -170,7 +170,7 @@ fn benchmark_manual_threads(benchmark_type: BenchmarkType) {
                     BenchmarkType::ComplexMessage => {
                         // Parse complex message and access headers
                         let mut sip_message = SipMessage::new_from_str(&message_clone);
-                        if sip_message.parse().is_ok() {
+                        if sip_message.parse_headers().is_ok() {
                             let _ = sip_message.to();
                             let _ = sip_message.from();
                             let _ = sip_message.via();
