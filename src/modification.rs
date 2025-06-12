@@ -702,7 +702,7 @@ pub mod zero_copy {
         }
 
         /// Check if a header exists in the original message
-        fn header_exists_in_original(&self, header_name: &str) -> bool {
+        fn _header_exists_in_original(&self, header_name: &str) -> bool {
             // Check if we can get any headers by this name
             !self.original.get_headers_by_name(header_name).is_empty()
         }
