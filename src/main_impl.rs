@@ -489,7 +489,8 @@ impl SipMessage {
             validate_required_option_header!(self, self.from, "From");
             validate_required_option_header!(self, self.cseq, "CSeq");
             validate_required_option_header!(self, self.call_id, "Call-ID");
-            validate_required_option_header!(self, self.max_forwards, "Max-Forwards");
+            // Max-Forwards is technically required but often added by proxies if missing
+            // validate_required_option_header!(self, self.max_forwards, "Max-Forwards");
         }
 
         // For responses, the requirements are slightly different, but we'll focus on requests for now
@@ -1637,6 +1638,19 @@ impl SipMessage {
         if let Some(ref call_id_header) = self.call_id {
             if let HeaderValue::Raw(range) = call_id_header {
                 Some(range.as_str(&self.raw_message).to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+    
+    /// Get the Max-Forwards header value
+    pub fn max_forwards(&self) -> Option<u32> {
+        if let Some(ref max_forwards_header) = self.max_forwards {
+            if let HeaderValue::Raw(range) = max_forwards_header {
+                range.as_str(&self.raw_message).trim().parse().ok()
             } else {
                 None
             }
