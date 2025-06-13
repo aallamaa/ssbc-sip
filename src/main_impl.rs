@@ -2516,7 +2516,7 @@ Max-Forwards: 70\r
             _ => panic!("Expected InvalidMessage error for missing To header"),
         }
 
-        // Test message missing Max-Forwards
+        // Test message missing Max-Forwards - now optional, should succeed
         let message_missing_max_forwards = "\
 INVITE sip:bob@biloxi.com SIP/2.0\r
 Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r
@@ -2528,18 +2528,11 @@ CSeq: 314159 INVITE\r
 ";
         let mut sip_message = SipMessage::new_from_str(message_missing_max_forwards);
         let result = sip_message.parse_headers();
-        assert!(result.is_err());
-
-        match result {
-            Err(SsbcError::ParseError {
-                context: None,
-                message,
-                position: _,
-            }) => {
-                assert!(message.contains("Missing required Max-Forwards header"));
-            }
-            _ => panic!("Expected InvalidMessage error for missing Max-Forwards header"),
-        }
+        // Max-Forwards is now optional - proxies add it if missing
+        assert!(result.is_ok());
+        
+        // Verify we can access max_forwards and it returns None
+        assert_eq!(sip_message.max_forwards(), None);
     }
 
     #[test]
