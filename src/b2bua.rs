@@ -501,7 +501,7 @@ fn generate_tag() -> String {
 }
 
 fn generate_call_id() -> String {
-    format!("call-{}-{}", current_timestamp(), rand::random::<u32>())
+    format!("call-{}-b2b-{}", current_timestamp(), rand::random::<u32>())
 }
 
 fn extract_media_info(sdp: &SessionDescription) -> SsbcResult<(String, u16)> {

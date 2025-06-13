@@ -4,11 +4,13 @@
 
 // benchmark module is now at crate level
 
-use crate::types::*;
-use crate::{validate_required_option_header, validate_required_vec_header, check_duplicate_and_set};
 use crate::error::{SsbcError, SsbcResult};
 use crate::limits::*;
+use crate::types::*;
 use crate::validation;
+use crate::{
+    check_duplicate_and_set, validate_required_option_header, validate_required_vec_header,
+};
 use std::collections::HashMap;
 
 /// Macro to create a clone of a SipMessage for parsing
@@ -17,18 +19,16 @@ use std::collections::HashMap;
 // but it's inefficient as it clones the entire message unnecessarily.
 // Instead, we now use optimized methods that take a reference to the raw message
 // (see get_raw_message macro and methods like parse_uri_with_message).
-//#[macro_export]
-//macro_rules! clone_for_parsing {
-//    ($self:expr) => {
-//        {
-//            let raw_message_clone = $self.raw_message.clone();
-//            SipMessage {
-//                raw_message: raw_message_clone,
-//                ..$self.clone()
-//            }
-//        }
-//    };
-//}
+#[macro_export]
+macro_rules! clone_for_parsing {
+    ($self:expr) => {{
+        let raw_message_clone = $self.raw_message.clone();
+        SipMessage {
+            raw_message: raw_message_clone,
+            ..$self.clone()
+        }
+    }};
+}
 
 /// Macro to get a reference to the raw message string
 /// This avoids unnecessary cloning when we just need to access the raw message
@@ -262,18 +262,17 @@ pub struct SipMessage {
     headers: Vec<(TextRange, HeaderValue)>,
 }
 
-
 impl SipMessage {
     /// Create a new SIP message from the raw text
     pub fn new(message: String) -> Self {
         Self::with_limits(message, ParserLimits::default())
     }
-    
+
     /// Parse a SIP message from bytes (static method for backward compatibility)
     pub fn parse(data: &[u8]) -> Result<Self, SsbcError> {
         let message_str = std::str::from_utf8(data)
             .map_err(|e| SsbcError::parse_error(&format!("Invalid UTF-8: {}", e), None, None))?;
-        
+
         let mut msg = Self::new_from_str(message_str);
         msg.parse_headers()?;
         Ok(msg)
@@ -328,8 +327,11 @@ impl SipMessage {
         // Validate message size
         if self.raw_message.len() > self.limits().max_message_size {
             return Err(SsbcError::ParseError {
-                message: format!("Message size {} exceeds maximum {}", 
-                    self.raw_message.len(), self.limits().max_message_size),
+                message: format!(
+                    "Message size {} exceeds maximum {}",
+                    self.raw_message.len(),
+                    self.limits().max_message_size
+                ),
                 position: None,
                 context: Some("Message too large".to_string()),
             });
@@ -368,8 +370,11 @@ impl SipMessage {
         // Check start line length limit
         if self.start_line.len() > self.limits().max_start_line_length {
             return Err(SsbcError::ParseError {
-                message: format!("Start line length {} exceeds maximum {}", 
-                    self.start_line.len(), self.limits().max_start_line_length),
+                message: format!(
+                    "Start line length {} exceeds maximum {}",
+                    self.start_line.len(),
+                    self.limits().max_start_line_length
+                ),
                 position: Some((1, 0)),
                 context: Some("Start line too long".to_string()),
             });
@@ -421,18 +426,21 @@ impl SipMessage {
 
             // Process complete header (from start to end, including any folded parts)
             let header_range = TextRange::from_usize(current_header_start, line_end);
-            
+
             // Check header count limit
             header_count += 1;
             if header_count > self.limits().max_headers {
                 return Err(SsbcError::ParseError {
-                    message: format!("Too many headers: {} exceeds maximum {}", 
-                        header_count, self.limits().max_headers),
+                    message: format!(
+                        "Too many headers: {} exceeds maximum {}",
+                        header_count,
+                        self.limits().max_headers
+                    ),
                     position: None,
                     context: Some("DoS protection".to_string()),
                 });
             }
-            
+
             self.process_header_line(header_range)?;
 
             // Move to next header
@@ -443,17 +451,20 @@ impl SipMessage {
         // Set body if present
         if body_start < message_len {
             let body_range = TextRange::from_usize(body_start, message_len);
-            
+
             // Check body size limit
             if body_range.len() > self.limits().max_body_size {
                 return Err(SsbcError::ParseError {
-                    message: format!("Body size {} exceeds maximum {}", 
-                        body_range.len(), self.limits().max_body_size),
+                    message: format!(
+                        "Body size {} exceeds maximum {}",
+                        body_range.len(),
+                        self.limits().max_body_size
+                    ),
                     position: None,
                     context: Some("Body too large".to_string()),
                 });
             }
-            
+
             self.body = Some(body_range);
         }
 
@@ -491,8 +502,11 @@ impl SipMessage {
         // Check header line length limit
         if range.len() > self.limits().max_header_line_length {
             return Err(SsbcError::ParseError {
-                message: format!("Header line length {} exceeds maximum {}", 
-                    range.len(), self.limits().max_header_line_length),
+                message: format!(
+                    "Header line length {} exceeds maximum {}",
+                    range.len(),
+                    self.limits().max_header_line_length
+                ),
                 position: Some((0, range.start)),
                 context: Some("Header line too long".to_string()),
             });
@@ -523,10 +537,10 @@ impl SipMessage {
 
         // Get the header name and normalize to lowercase for comparisons
         let raw_name = &unfolded_line[0..colon_pos];
-        
+
         // Validate header name
         validation::validate_header_name(raw_name)?;
-        
+
         let lowercase_name = raw_name.to_lowercase();
 
         // Convert compact form to full form if necessary
@@ -537,7 +551,7 @@ impl SipMessage {
 
         // Extract value (skip leading whitespace)
         let value_str = unfolded_line[colon_pos + 1..].trim();
-        
+
         // Validate and sanitize header value
         let _validated_value = validation::sanitize_header_value(value_str)?;
 
@@ -1071,7 +1085,7 @@ impl SipMessage {
         // Validate the URI before returning
         let uri_str = range.as_str(raw_message);
         validation::validate_uri(uri_str, self.limits().max_uri_depth)?;
-        
+
         Ok(uri)
     }
 
@@ -1206,15 +1220,11 @@ impl SipMessage {
 
             // Parse port
             let port_str = &host_port[colon_pos + 1..];
-            uri.port = Some(
-                port_str
-                    .parse::<u16>()
-                    .map_err(|_| SsbcError::ParseError {
-                        message: format!("Invalid port: {}", port_str),
-                        position: None,
-                        context: None,
-                    })?,
-            );
+            uri.port = Some(port_str.parse::<u16>().map_err(|_| SsbcError::ParseError {
+                message: format!("Invalid port: {}", port_str),
+                position: None,
+                context: None,
+            })?);
         } else {
             uri.host = Some(host_port_range);
         }
@@ -1376,7 +1386,7 @@ impl SipMessage {
                 } else {
                     Some(method)
                 }
-            },
+            }
             Err(_) => Some(Method::UNKNOWN(parts[0].to_string())),
         }
     }
@@ -1387,32 +1397,33 @@ impl SipMessage {
             Some(HeaderValue::Raw(range)) => *range,
             _ => return Err(SsbcError::parse_error("No From header", None, None)),
         };
-        
+
         let from_str = self.get_str(from_range);
-        
+
         // Extract URI from format: "Display Name" <sip:user@host>;tag=value
         let uri_start = from_str.find('<');
         let uri_end = from_str.find('>');
-        
+
         if let (Some(start), Some(end)) = (uri_start, uri_end) {
             if start < end {
                 // Calculate the range for the URI inside angle brackets
                 let uri_range = TextRange::from_usize(
                     from_range.start as usize + start + 1,
-                    from_range.start as usize + end
+                    from_range.start as usize + end,
                 );
                 return self.parse_uri(uri_range);
             }
         }
-        
+
         // No angle brackets, try to parse the whole thing up to semicolon
         let uri_end = from_str.find(';').unwrap_or(from_str.len());
-        let trimmed_start = from_str[..uri_end].trim_start().as_ptr() as usize - from_str.as_ptr() as usize;
+        let trimmed_start =
+            from_str[..uri_end].trim_start().as_ptr() as usize - from_str.as_ptr() as usize;
         let trimmed_end = from_str[..uri_end].trim_end().len() + trimmed_start;
-        
+
         let uri_range = TextRange::from_usize(
             from_range.start as usize + trimmed_start,
-            from_range.start as usize + trimmed_end
+            from_range.start as usize + trimmed_end,
         );
         self.parse_uri(uri_range)
     }
@@ -1423,32 +1434,33 @@ impl SipMessage {
             Some(HeaderValue::Raw(range)) => *range,
             _ => return Err(SsbcError::parse_error("No To header", None, None)),
         };
-        
+
         let to_str = self.get_str(to_range);
-        
+
         // Extract URI from format: "Display Name" <sip:user@host>;tag=value
         let uri_start = to_str.find('<');
         let uri_end = to_str.find('>');
-        
+
         if let (Some(start), Some(end)) = (uri_start, uri_end) {
             if start < end {
                 // Calculate the range for the URI inside angle brackets
                 let uri_range = TextRange::from_usize(
                     to_range.start as usize + start + 1,
-                    to_range.start as usize + end
+                    to_range.start as usize + end,
                 );
                 return self.parse_uri(uri_range);
             }
         }
-        
+
         // No angle brackets, try to parse the whole thing up to semicolon
         let uri_end = to_str.find(';').unwrap_or(to_str.len());
-        let trimmed_start = to_str[..uri_end].trim_start().as_ptr() as usize - to_str.as_ptr() as usize;
+        let trimmed_start =
+            to_str[..uri_end].trim_start().as_ptr() as usize - to_str.as_ptr() as usize;
         let trimmed_end = to_str[..uri_end].trim_end().len() + trimmed_start;
-        
+
         let uri_range = TextRange::from_usize(
             to_range.start as usize + trimmed_start,
-            to_range.start as usize + trimmed_end
+            to_range.start as usize + trimmed_end,
         );
         self.parse_uri(uri_range)
     }
@@ -1456,37 +1468,45 @@ impl SipMessage {
     /// Extract Contact URI without allocating
     pub fn contact_uri(&self) -> Result<SipUri, SsbcError> {
         let contacts = self.get_headers_by_name("Contact");
-        let contact = contacts.first()
+        let contact = contacts
+            .first()
             .ok_or_else(|| SsbcError::parse_error("No Contact header", None, None))?;
-        
+
         let contact_range = match contact {
             HeaderValue::Raw(range) => *range,
-            _ => return Err(SsbcError::parse_error("Contact header not in expected format", None, None)),
+            _ => {
+                return Err(SsbcError::parse_error(
+                    "Contact header not in expected format",
+                    None,
+                    None,
+                ))
+            }
         };
-        
+
         let contact_str = self.get_str(contact_range);
         // Extract URI from format: "Display Name" <sip:user@host>;parameters
         let uri_start = contact_str.find('<');
         let uri_end = contact_str.find('>');
-        
+
         if let (Some(start), Some(end)) = (uri_start, uri_end) {
             if start < end {
                 // Calculate the range for the URI inside angle brackets
                 let uri_range = TextRange::from_usize(
                     contact_range.start as usize + start + 1,
-                    contact_range.start as usize + end
+                    contact_range.start as usize + end,
                 );
                 return self.parse_uri(uri_range);
             }
         }
-        
+
         // No angle brackets, try to parse the whole thing
-        let trimmed_start = contact_str.trim_start().as_ptr() as usize - contact_str.as_ptr() as usize;
+        let trimmed_start =
+            contact_str.trim_start().as_ptr() as usize - contact_str.as_ptr() as usize;
         let trimmed_end = contact_str.trim_end().len() + trimmed_start;
-        
+
         let uri_range = TextRange::from_usize(
             contact_range.start as usize + trimmed_start,
-            contact_range.start as usize + trimmed_end
+            contact_range.start as usize + trimmed_end,
         );
         self.parse_uri(uri_range)
     }
@@ -1496,21 +1516,21 @@ impl SipMessage {
         if !self.is_request {
             return Err(SsbcError::parse_error("Not a request", None, None));
         }
-        
+
         let start_line = self.get_str(self.start_line);
         let parts: Vec<&str> = start_line.split_whitespace().collect();
         if parts.len() < 2 {
             return Err(SsbcError::parse_error("Invalid request line", None, None));
         }
-        
+
         // The URI is the second part of the request line
         let uri_str = parts[1];
         let uri_start = start_line.find(uri_str).unwrap_or(0);
         let uri_range = TextRange::from_usize(
             self.start_line.start as usize + uri_start,
-            self.start_line.start as usize + uri_start + uri_str.len()
+            self.start_line.start as usize + uri_start + uri_str.len(),
         );
-        
+
         self.parse_uri(uri_range)
     }
 
@@ -1521,7 +1541,7 @@ impl SipMessage {
             _ => return None,
         };
         let from_str = self.get_str(*from_range);
-        
+
         // Find tag parameter after semicolon
         if let Some(tag_pos) = from_str.find("tag=") {
             let tag_start = tag_pos + 4;
@@ -1530,7 +1550,7 @@ impl SipMessage {
                 .find(';')
                 .map(|i| tag_start + i)
                 .unwrap_or(from_str.len());
-            
+
             Some(&from_str[tag_start..tag_end])
         } else {
             None
@@ -1544,7 +1564,7 @@ impl SipMessage {
             _ => return None,
         };
         let to_str = self.get_str(*to_range);
-        
+
         // Find tag parameter after semicolon
         if let Some(tag_pos) = to_str.find("tag=") {
             let tag_start = tag_pos + 4;
@@ -1553,7 +1573,7 @@ impl SipMessage {
                 .find(';')
                 .map(|i| tag_start + i)
                 .unwrap_or(to_str.len());
-            
+
             Some(&to_str[tag_start..tag_end])
         } else {
             None
@@ -1567,7 +1587,6 @@ impl SipMessage {
             _ => None,
         }
     }
-
 
     /// Add this method to parse Event header for SUBSCRIBE/NOTIFY
     pub fn parse_event(&mut self) -> Result<Option<&EventPackageData>, SsbcError> {
@@ -1630,20 +1649,20 @@ impl SipMessage {
 /// Generic SIP header extraction utilities
 pub mod header_utils {
     use crate::SipMessage;
-    
+
     /// Extract header value by name, supporting both long and compact forms
-    /// 
+    ///
     /// This function searches for headers by name, automatically handling
     /// RFC 3261 compact forms (e.g., "f" for "from", "t" for "to").
-    /// 
+    ///
     /// # Examples
     /// ```
     /// use ssbc::{SipMessage, header_utils::extract_header_value};
-    /// 
+    ///
     /// let sip_msg = "INVITE sip:bob@example.com SIP/2.0\r\nVia: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r\nFrom: Alice <sip:alice@example.com>;tag=123\r\nTo: Bob <sip:bob@example.com>\r\nCall-ID: call123@example.com\r\nCSeq: 1 INVITE\r\n\r\n";
     /// let mut message = SipMessage::new_from_str(sip_msg);
     /// message.parse_without_validation().unwrap();
-    /// 
+    ///
     /// // Works with both "From" and "f" headers
     /// let from_value = extract_header_value(&message, "from");
     /// assert!(from_value.is_some());
@@ -1651,11 +1670,11 @@ pub mod header_utils {
     pub fn extract_header_value(sip_message: &SipMessage, header_name: &str) -> Option<String> {
         let raw_message = sip_message.raw_message();
         let header_lower = header_name.to_lowercase();
-        
+
         // RFC 3261 compact form mapping
         let compact_form = match header_lower.as_str() {
             "from" => Some("f"),
-            "to" => Some("t"), 
+            "to" => Some("t"),
             "via" => Some("v"),
             "contact" => Some("m"),
             "call-id" => Some("i"),
@@ -1664,16 +1683,16 @@ pub mod header_utils {
             "subject" => Some("s"),
             _ => None,
         };
-        
+
         let prefixes = if let Some(compact) = compact_form {
             vec![format!("{}:", header_lower), format!("{}:", compact)]
         } else {
             vec![format!("{}:", header_lower)]
         };
-        
+
         for line in raw_message.lines() {
             let line_lower = line.to_lowercase();
-            
+
             for prefix in &prefixes {
                 if line_lower.starts_with(prefix) {
                     if let Some(colon_pos) = line.find(':') {
@@ -1684,62 +1703,63 @@ pub mod header_utils {
         }
         None
     }
-    
+
     /// Extract parameter value from a header value string
-    /// 
+    ///
     /// Parses SIP header parameters in the format "param=value" from
     /// a header value, handling quoted and unquoted values.
-    /// 
+    ///
     /// # Examples
     /// ```
     /// use ssbc::header_utils::extract_header_parameter;
-    /// 
+    ///
     /// let from_header = "Alice <sip:alice@example.com>;tag=abc123";
     /// let tag = extract_header_parameter(from_header, "tag"); // Some("abc123")
-    /// 
+    ///
     /// let via_header = "SIP/2.0/UDP host.com;branch=z9hG4bK-123";
     /// let branch = extract_header_parameter(via_header, "branch"); // Some("z9hG4bK-123")
     /// ```
     pub fn extract_header_parameter(header_value: &str, param_name: &str) -> Option<String> {
         let param_lower = param_name.to_lowercase();
         let param_prefix = format!("{}=", param_lower);
-        
+
         for part in header_value.split(';') {
             let part_trimmed = part.trim();
             let part_lower = part_trimmed.to_lowercase();
-            
+
             if part_lower.starts_with(&param_prefix) {
                 // Extract the value part after the "param=" prefix
                 let value_start = part_trimmed.find('=').unwrap() + 1;
                 let value = part_trimmed[value_start..].trim();
-                
+
                 // Remove quotes if present
-                let unquoted = if value.starts_with('"') && value.ends_with('"') && value.len() > 1 {
-                    &value[1..value.len()-1]
+                let unquoted = if value.starts_with('"') && value.ends_with('"') && value.len() > 1
+                {
+                    &value[1..value.len() - 1]
                 } else {
                     value
                 };
-                
+
                 return Some(unquoted.to_string());
             }
         }
         None
     }
-    
+
     /// Get all header values for a given header name
-    /// 
+    ///
     /// Returns a vector of all header values that match the given name,
     /// useful for headers that can appear multiple times (like Via).
     pub fn get_header_values(sip_message: &SipMessage, header_name: &str) -> Vec<String> {
         let raw_message = sip_message.raw_message();
         let header_lower = header_name.to_lowercase();
         let mut values = Vec::new();
-        
-        // RFC 3261 compact form mapping  
+
+        // RFC 3261 compact form mapping
         let compact_form = match header_lower.as_str() {
             "from" => Some("f"),
             "to" => Some("t"),
-            "via" => Some("v"), 
+            "via" => Some("v"),
             "contact" => Some("m"),
             "call-id" => Some("i"),
             "content-length" => Some("l"),
@@ -1747,16 +1767,16 @@ pub mod header_utils {
             "subject" => Some("s"),
             _ => None,
         };
-        
+
         let prefixes = if let Some(compact) = compact_form {
             vec![format!("{}:", header_lower), format!("{}:", compact)]
         } else {
             vec![format!("{}:", header_lower)]
         };
-        
+
         for line in raw_message.lines() {
             let line_lower = line.to_lowercase();
-            
+
             for prefix in &prefixes {
                 if line_lower.starts_with(prefix) {
                     if let Some(colon_pos) = line.find(':') {
@@ -1766,13 +1786,10 @@ pub mod header_utils {
                 }
             }
         }
-        
+
         values
     }
 }
-
-
-
 
 #[cfg(test)]
 mod tests {
@@ -2207,7 +2224,6 @@ Content-Type: application/sdp\r
         }
     }
 
-
     #[test]
     fn test_body_with_content_length() {
         // Test body parsing using Content-Length header
@@ -2250,7 +2266,8 @@ Max-Forwards: 70\r
 
         match result {
             Err(SsbcError::ParseError {
-                context: None,                message,
+                context: None,
+                message,
                 position: _,
             }) => {
                 assert!(message.contains("Duplicate To header"));
@@ -2276,7 +2293,8 @@ Max-Forwards: 70\r
 
         match result {
             Err(SsbcError::ParseError {
-                context: None,                message,
+                context: None,
+                message,
                 position: _,
             }) => {
                 assert!(message.contains("Duplicate From header"));
@@ -2302,7 +2320,8 @@ Max-Forwards: 70\r
 
         match result {
             Err(SsbcError::ParseError {
-                context: None,                message,
+                context: None,
+                message,
                 position: _,
             }) => {
                 assert!(message.contains("Duplicate CSeq header"));
@@ -2341,9 +2360,16 @@ Max-Forwards: 70\r
                 context,
             }) => {
                 // Position might be None for URI parsing errors
-                println!("ParseError: message={}, position={:?}, context={:?}", message, position, context);
+                println!(
+                    "ParseError: message={}, position={:?}, context={:?}",
+                    message, position, context
+                );
                 // Just verify we got a parse error
-                assert!(message.contains("uri") || message.contains("URI") || message.contains("Invalid"));
+                assert!(
+                    message.contains("uri")
+                        || message.contains("URI")
+                        || message.contains("Invalid")
+                );
             }
             _ => panic!("Expected ParseError, got: {:?}", result),
         }
@@ -2467,7 +2493,8 @@ Max-Forwards: 70\r
 
         match result {
             Err(SsbcError::ParseError {
-                context: None,                message,
+                context: None,
+                message,
                 position: _,
             }) => {
                 assert!(message.contains("Missing required To header"));
@@ -2491,7 +2518,8 @@ CSeq: 314159 INVITE\r
 
         match result {
             Err(SsbcError::ParseError {
-                context: None,                message,
+                context: None,
+                message,
                 position: _,
             }) => {
                 assert!(message.contains("Missing required Max-Forwards header"));
@@ -3020,7 +3048,7 @@ Max-Forwards: 70\r
         assert_eq!(sip_message.get_opt_str(to_uri.user_info), Some("bob"));
         assert_eq!(sip_message.get_opt_str(to_uri.host), Some("biloxi.com"));
         assert_eq!(to_uri.port, Some(5080));
-        
+
         // Check URI parameter
         let params_map = sip_message.get_params_map(&to_uri.params);
         assert_eq!(params_map.get("transport").unwrap(), &Some("tcp"));
@@ -3044,8 +3072,14 @@ Contact: <sip:alice@192.168.1.100:5060;transport=udp>\r
 
         let contact_uri = sip_message.contact_uri().unwrap();
         assert_eq!(contact_uri.scheme, Scheme::SIP);
-        assert_eq!(sip_message.get_opt_str(contact_uri.user_info), Some("alice"));
-        assert_eq!(sip_message.get_opt_str(contact_uri.host), Some("192.168.1.100"));
+        assert_eq!(
+            sip_message.get_opt_str(contact_uri.user_info),
+            Some("alice")
+        );
+        assert_eq!(
+            sip_message.get_opt_str(contact_uri.host),
+            Some("192.168.1.100")
+        );
         assert_eq!(contact_uri.port, Some(5060));
     }
 
@@ -3067,7 +3101,10 @@ Max-Forwards: 70\r
         let request_uri = sip_message.request_uri().unwrap();
         assert_eq!(request_uri.scheme, Scheme::SIP);
         assert_eq!(sip_message.get_opt_str(request_uri.user_info), Some("bob"));
-        assert_eq!(sip_message.get_opt_str(request_uri.host), Some("biloxi.com"));
+        assert_eq!(
+            sip_message.get_opt_str(request_uri.host),
+            Some("biloxi.com")
+        );
         assert_eq!(request_uri.port, Some(5060));
     }
 
